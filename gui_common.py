@@ -34,6 +34,7 @@ else:
 
 _theme_nav_active: int = 0
 _theme_nav_normal: int = 0
+_theme_compact:    int = 0
 _nav_btn_ids: dict[str, int] = {}
 _prog_stop = threading.Event()
 
@@ -101,6 +102,11 @@ def setup_theme():
             dpg.add_theme_color(dpg.mvThemeCol_Button,        (22,  23,  38, 0))
             dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (40,  45,  65))
             dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,  (30,  33,  52))
+
+    global _theme_compact
+    with dpg.theme() as _theme_compact:
+        with dpg.theme_component(dpg.mvAll):
+            dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 8, 1)
 
 
 # ── Navigation helpers ────────────────────────────────────────────────────────
@@ -454,13 +460,82 @@ def find_proton_prefix_for_ns_exe(exe_str: str) -> str | None:
 
 
 def list_proton_prefixes() -> list[list[str]]:
+    from ludusavi import _BASELINE_DRIVE_C, _BASELINE_PROGRAM_FILES, _BASELINE_PROGRAM_FILES_X86
     dirs = sorted(_all_compatdata_dirs(), key=lambda d: d.stat().st_mtime, reverse=True)
     rows = []
     for d in dirs:
-        pf   = d / "pfx" / "drive_c" / "Program Files"
-        hint = ""
-        if pf.exists():
-            subdirs = [x.name for x in sorted(pf.iterdir()) if x.is_dir()][:4]
-            hint    = ", ".join(subdirs)
-        rows.append([d.name, hint])
+        dc    = d / "pfx" / "drive_c"
+        count = 0
+        if dc.exists():
+            try:
+                count += sum(1 for x in dc.iterdir() if x.is_dir() and x.name not in _BASELINE_DRIVE_C)
+                for pf_name, baseline in (
+                    ("Program Files",       _BASELINE_PROGRAM_FILES),
+                    ("Program Files (x86)", _BASELINE_PROGRAM_FILES_X86),
+                ):
+                    pf = dc / pf_name
+                    if pf.exists():
+                        count += sum(1 for x in pf.iterdir() if x.is_dir() and x.name not in baseline)
+            except PermissionError:
+                pass
+        label = f"{count} folder{'s' if count != 1 else ''}" if count else ""
+        rows.append([d.name, label])
     return rows
+
+
+def get_prefix_tree(app_id: str) -> list[str]:
+    """Return indented display lines for all non-default game folders in a prefix."""
+    from ludusavi import _BASELINE_DRIVE_C, _BASELINE_PROGRAM_FILES, _BASELINE_PROGRAM_FILES_X86
+    from steam import proton_drive_c
+    dc = proton_drive_c(app_id)
+    if not dc.exists():
+        return []
+    lines = []
+    try:
+        c_dirs = sorted(d for d in dc.iterdir() if d.is_dir() and d.name not in _BASELINE_DRIVE_C)
+        if c_dirs:
+            lines.append("C:\\")
+            for d in c_dirs:
+                lines.append(f"  {d.name}\\")
+                for sd in sorted(x for x in d.iterdir() if x.is_dir()):
+                    lines.append(f"    {sd.name}")
+        for pf_name, baseline in (
+            ("Program Files",       _BASELINE_PROGRAM_FILES),
+            ("Program Files (x86)", _BASELINE_PROGRAM_FILES_X86),
+        ):
+            pf = dc / pf_name
+            if not pf.exists():
+                continue
+            pf_dirs = sorted(d for d in pf.iterdir() if d.is_dir() and d.name not in baseline)
+            if pf_dirs:
+                lines.append(f"{pf_name}\\")
+                for d in pf_dirs:
+                    lines.append(f"  {d.name}\\")
+                    for sd in sorted(x for x in d.iterdir() if x.is_dir()):
+                        lines.append(f"    {sd.name}")
+    except PermissionError:
+        pass
+    return lines
+
+
+def refresh_prefix_tree(app_id: str, tree_tag: str, height: int = 120) -> None:
+    import dearpygui.dearpygui as dpg
+    if not dpg.does_item_exist(tree_tag):
+        return
+    dpg.delete_item(tree_tag, children_only=True)
+    lines = get_prefix_tree(app_id)
+    if not lines:
+        dpg.add_text("  (no game folders found)", parent=tree_tag, color=(130, 130, 155))
+        return
+    with dpg.table(
+        parent=tree_tag,
+        header_row=False, scrollY=True, height=height,
+        borders_outerH=True,
+        policy=dpg.mvTable_SizingStretchSame,
+    ):
+        dpg.add_table_column()
+        for line in lines:
+            depth = (len(line) - len(line.lstrip())) // 2
+            color = (210, 210, 230) if depth == 0 else (170, 170, 195) if depth == 1 else (130, 130, 155)
+            with dpg.table_row():
+                dpg.add_text(line, color=color)

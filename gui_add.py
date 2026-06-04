@@ -22,7 +22,8 @@ from steam import (
 from gui_common import (
     SAVESYNC_BIN, set_nav_active, clear_content, add_header, add_action_bar,
     add_table, add_path_row, run_async, show_progress, stop_progress, show_done, show_error,
-    find_proton_prefix_for_ns_exe, list_proton_prefixes, shutdown_steam_sync,
+    find_proton_prefix_for_ns_exe, list_proton_prefixes, refresh_prefix_tree,
+    shutdown_steam_sync,
 )
 from gui_home import require_configured
 import ludusavi
@@ -202,12 +203,16 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
         prefix_rows = list_proton_prefixes()
         if prefix_rows:
             dpg.add_text("Select prefix:", parent="content_group", color=(130, 130, 155))
-            pfx_state = add_table(["App ID", "Program Files"], prefix_rows,
-                                  col_weights=[1, 3], height=150)
+            pfx_state = add_table(["App ID", "Game folders"], prefix_rows,
+                                  col_weights=[1, 2], height=150)
+            dpg.add_group(tag="_add_pfx_tree", parent="content_group")
+            if detected:
+                refresh_prefix_tree(detected, "_add_pfx_tree")
             for t in pfx_state["sel_tags"]:
                 dpg.configure_item(t, callback=lambda s, a, u: (
                     [dpg.set_value(x, False) for x in pfx_state["sel_tags"] if x != s],
                     dpg.set_value(aid_tag, u[0]) if u and dpg.does_item_exist(aid_tag) else None,
+                    refresh_prefix_tree(u[0], "_add_pfx_tree") if u else None,
                 ))
     else:
         dpg.add_input_text(tag=aid_tag, default_value="",

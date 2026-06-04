@@ -1,5 +1,7 @@
 # ExternalGameSync
 
+![Home Screen](docs/examples/home_screen.png)
+
 Keep your non-Steam game saves in sync across your PC and Steam Deck (or any mix of Windows and Linux machines), using your own cloud storage. No subscription, no third-party servers — your saves go directly to storage you already own or control.
 
 ExternalGameSync handles the whole workflow: getting a Windows game running under Proton, setting up save syncing, and keeping everything up to date automatically every time you launch a game through Steam.
@@ -76,7 +78,12 @@ Before syncing, the game needs to exist as a non-Steam shortcut so Proton can ru
 
 **Install Game** (sidebar) handles this end-to-end:
 
+![Selecting installer exe](docs/examples/install_1.png)
+
 1. Enter a display name and browse to the Windows `.exe` installer for the game.
+
+![Selecting proton prefix](docs/examples/install_2.png)
+
 2. Pick the Proton version to use.
 
 ExternalGameSync shuts Steam down, writes the shortcut and Proton mapping to `shortcuts.vdf` / `config.vdf`, then relaunches Steam and queues the installer to run automatically. Complete the installation — keep the default install folder to make things easier later.

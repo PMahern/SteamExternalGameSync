@@ -24,7 +24,8 @@ from gui_common import (
     SAVESYNC_BIN, set_nav_active, clear_content, add_header, add_action_bar,
     add_table, add_path_row, run_async, show_progress, stop_progress, show_done, show_error,
     win_exe_candidates, win_save_candidates, try_resolve_windows_paths,
-    find_proton_prefix_for_shortcut, list_proton_prefixes, shutdown_steam_sync,
+    find_proton_prefix_for_shortcut, list_proton_prefixes, refresh_prefix_tree,
+    shutdown_steam_sync,
 )
 from gui_home import require_configured, refresh_and_home
 
@@ -368,18 +369,21 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
             pfx_state = None
             if prefix_rows:
                 dpg.add_text("Select prefix:", parent="content_group", color=(130, 130, 155))
-                pfx_state = add_table(["App ID", "Program Files"], prefix_rows,
-                                      col_weights=[1, 3], height=100)
+                pfx_state = add_table(["App ID", "Game folders"], prefix_rows,
+                                      col_weights=[1, 2], height=100)
+                dpg.add_group(tag="_assign_pfx_tree", parent="content_group")
                 for t in pfx_state["sel_tags"]:
                     dpg.configure_item(t, callback=lambda s, a, u: (
                         [dpg.set_value(x, False) for x in pfx_state["sel_tags"] if x != s],
                         dpg.set_value(aid_tag, u[0]) if u and dpg.does_item_exist(aid_tag) else None,
+                        refresh_prefix_tree(u[0], "_assign_pfx_tree") if u else None,
                     ))
                 if auto_aid_val:
                     for i, row in enumerate(prefix_rows):
                         if row[0] == auto_aid_val:
                             dpg.set_value(pfx_state["sel_tags"][i], True)
                             pfx_state["selected"] = row
+                            refresh_prefix_tree(auto_aid_val, "_assign_pfx_tree")
                             break
         dpg.add_spacer(height=4, parent="content_group")
 
