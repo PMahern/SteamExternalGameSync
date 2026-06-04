@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ExternalGameSync
+Comment=Sync non-Steam game saves via cloud storage
+Exec=externalgamesync gui
+Icon=externalgamesync
+Terminal=false
+Categories=Game;Utility;
+Keywords=game;save;sync;nextcloud;steam;

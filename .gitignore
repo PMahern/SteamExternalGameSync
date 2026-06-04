@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Decky plugin — commit the built bundle so Steam Deck users don't need Node.js
+!decky_plugin/dist/
+decky_plugin/node_modules/
+decky_plugin/package-lock.json
+
+# Local config — never commit credentials or machine-specific state
+~/.config/externalgamesync/
+settings.json
+games.json
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+#claude
+.claude
