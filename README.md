@@ -293,7 +293,6 @@ ExternalGameSync/                   <- root on your cloud storage remote
 }
 ```
 
-Paths use Windows-style separators and are relative to the Proton prefix `drive_c`, so they work on any Linux machine where the game is installed under the same path. On Windows, absolute paths are stored in the local config instead.
 
 ### Local machine config
 
@@ -323,8 +322,6 @@ On Windows, absolute exe and save paths are also stored since they vary by usern
   }
 }
 ```
-
-This separation keeps `games.json` clean and shareable — adding a new machine never touches the cloud config.
 
 ---
 
