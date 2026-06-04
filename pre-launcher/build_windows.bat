@@ -13,6 +13,38 @@ if not exist "%SRC%" (
     exit /b 1
 )
 
+:: ── Generate icon_data.h from icon.png ────────────────────────────────────────
+set ICON_SRC=%SCRIPT_DIR%..\icon.png
+set ICON_H=%SCRIPT_DIR%icon_data.h
+if not exist "%ICON_SRC%" (
+    echo [error] icon.png not found at %ICON_SRC%
+    exit /b 1
+)
+set PY_CMD=
+where python3 >nul 2>&1
+if not errorlevel 1 set PY_CMD=python3
+if not defined PY_CMD (
+    where python >nul 2>&1
+    if not errorlevel 1 set PY_CMD=python
+)
+if not defined PY_CMD (
+    if exist "%ICON_H%" (
+        echo [warn] Python not found; using existing icon_data.h
+    ) else (
+        echo [error] Python not found and icon_data.h does not exist.
+        echo.
+        echo Install Python from python.org, then re-run this script.
+        exit /b 1
+    )
+) else (
+    echo Generating icon_data.h...
+    set ICON_PY=%TEMP%\egs_gen_icon.py
+    echo import sys; data=open(sys.argv[1],'rb').read(); out=open(sys.argv[2],'w'); pieces=[('  '+', '.join(format(b,'#04x') for b in data[i:i+12])) for i in range(0,len(data),12)]; out.write('static const unsigned char icon_png[] = {\n'); out.write(',\n'.join(pieces)); out.write('\n};\nstatic const unsigned int icon_png_len = '+str(len(data))+';\n'); out.close() > "!ICON_PY!"
+    "!PY_CMD!" "!ICON_PY!" "%ICON_SRC%" "%ICON_H%"
+    if errorlevel 1 ( echo [error] Failed to generate icon_data.h & exit /b 1 )
+    echo Generated icon_data.h
+)
+
 :: ── Try gcc candidates (MSYS2 or PATH) — prefer 32-bit ────────────────────────
 set GCC_PATH=
 for %%G in (
