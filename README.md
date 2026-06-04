@@ -1,5 +1,7 @@
 # ExternalGameSync
 
+![Home Screen](docs/examples/home_screen.png)
+
 Keep your non-Steam game saves in sync across your PC and Steam Deck (or any mix of Windows and Linux machines), using your own cloud storage. No subscription, no third-party servers — your saves go directly to storage you already own or control.
 
 ExternalGameSync handles the whole workflow: getting a Windows game running under Proton, setting up save syncing, and keeping everything up to date automatically every time you launch a game through Steam.
@@ -76,31 +78,47 @@ Before syncing, the game needs to exist as a non-Steam shortcut so Proton can ru
 
 **Install Game** (sidebar) handles this end-to-end:
 
+![Selecting installer exe](docs/examples/install_1.png)
+
 1. Enter a display name and browse to the Windows `.exe` installer for the game.
+
+![Selecting proton prefix](docs/examples/install_2.png)
+
 2. Pick the Proton version to use.
 
 ExternalGameSync shuts Steam down, writes the shortcut and Proton mapping to `shortcuts.vdf` / `config.vdf`, then relaunches Steam and queues the installer to run automatically. Complete the installation — keep the default install folder to make things easier later.
 
-On **Windows**, add the game to Steam manually in the usual way (Add a Non-Steam Game), then continue to the next step.
+On **Windows**, install the game normally first — run its installer, or install through GOG Galaxy, the Epic Games Launcher, or whichever store you bought it from. Once it's installed, add it to Steam manually (**Games → Add a Non-Steam Game to My Library**, then browse to the `.exe`), and continue to the next step.
 
 ---
 
 ### 3. Creating a sync config for a game
 
-Once the game is a Steam shortcut, use **Add New Game Config** (sidebar):
+Use **Add New Game Config** (sidebar):
 
-**Step 1 — Pick shortcut**
-Select the game from the list of non-Steam shortcuts detected in `shortcuts.vdf`.
+**Step 1 — Game type**
+Choose how the game is installed:
 
-**Step 2 — Name and Proton prefix**
-Confirm or edit the display name. On Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top.
+- **Non-Steam Shortcut** — a game you added to Steam manually via Games > Add a Non-Steam Game. It runs in its own Proton prefix, separate from any Steam purchase.
+- **Native Steam Game** — a game you bought on Steam that lacks working cloud saves (e.g. Dead Space 2). It uses the game's own Steam App ID and Proton prefix. After selecting this path, pick the game from the list of installed Steam games.
 
-**Step 3 — Paths and options**
+> **Steam Cloud conflict warning (native Steam only)**
+> If the game has any Steam Cloud support at all, ExternalGameSync and Steam Cloud managing the same saves will cause conflicts on every launch. Before continuing, disable Steam Cloud for the game: right-click in Steam > Properties > General, then uncheck "Keep game saves in the Steam Cloud."
+
+**Step 2 — Name and prefix / App ID**
+Confirm or edit the display name.
+- *Non-Steam shortcut*: on Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top.
+- *Native Steam game*: the App ID is shown read-only (it's the game's real Steam App ID); no prefix selection needed.
+
+**Step 3 — Find in game database (optional)**
+Search the ludusavi community manifest for auto-detected save paths (see [Ludusavi manifest integration](#ludusavi-manifest-integration) below).
+
+**Step 4 — Paths and options**
 
 | Field | What to enter |
 |---|---|
-| Executable | The main game `.exe`. On Linux, browse inside the Proton prefix — the GUI opens directly in `Program Files`. |
-| Save folder | The folder that holds save files. On Linux, browse inside the prefix — the GUI opens in `AppData/Roaming`. It's OK if the folder doesn't exist yet; it will be created the first time you save. Check PCGamingWiki if unsure. |
+| Executable | The main game `.exe`. For non-Steam shortcuts on Linux, browse inside the Proton prefix — the GUI opens directly in `Program Files`. For native Steam games on Linux, the exe is provided by Steam at launch and no path is needed. |
+| Save folder | The folder that holds save files. On Linux, browse inside the Proton prefix — the GUI opens in `AppData/Roaming`. It's OK if the folder doesn't exist yet; it will be created the first time you save. Check PCGamingWiki if unsure. |
 | Env vars | Optional environment variables for launch (e.g. `DXVK_ASYNC=1`). Linux only. |
 | Save filter | Optional rclone glob to sync only part of the save folder. Leave blank to sync the entire folder. |
 | Disc image | Optional path to an `.iso` to auto-mount via udisksctl before launch and unmount after. Useful for older games that check for a disc — the original Elder Scrolls: Oblivion is one example. |
@@ -120,7 +138,7 @@ Clicking **Configure** will:
 - Save the game config to `games.json` and push it to cloud storage
 - Create the save symlink in `~/ExternalGameSync/saves/<game_id>/` (Linux)
 - Run an initial pull + push to establish the baseline
-- Rewrite the Steam shortcut's Launch Options to use the sync wrapper and pre-launcher
+- Rewrite the Steam shortcut's Launch Options (non-Steam shortcut) or the game's Steam Launch Options (native Steam) to use the sync wrapper and pre-launcher
 
 Restart Steam when prompted for the Launch Options change to take effect.
 
@@ -133,17 +151,22 @@ On the second machine, run setup if you haven't already (step 1), then use **Ass
 **Step 1 — Pick game**
 The GUI lists all games from `games.json`. Use the search box to filter by name. Select the game you want to assign.
 
-**Step 2 — Pick shortcut**
-Select the matching non-Steam shortcut on this machine. If the game isn't in Steam yet, add it first (step 2 above).
+**Step 2 — Installation type**
+Choose how the game is installed on this machine:
+
+- **Non-Steam Shortcut** — if the game was added to Steam manually here. Select the matching shortcut from the list. If the game isn't in Steam yet, install it and add it as a non-Steam shortcut first (step 2 above).
+- **Native Steam Game** — if the game is a Steam purchase on this machine too. The GUI shows your installed Steam games; select the matching entry to fill the App ID automatically, or type it in directly. The same Steam Cloud warning from step 3 applies — disable Steam Cloud for the game before proceeding.
 
 **Step 3 — Confirm paths**
-The GUI resolves exe and save paths from the shared config and tries to auto-detect which Proton prefix the game lives in. On Linux, only the Proton prefix App ID is stored in the local config — paths are re-derived from the shared config at runtime. On Windows, absolute paths are stored locally because they vary by username and install location.
+The GUI resolves exe and save paths from the shared config.
+- *Non-Steam shortcut*: tries to auto-detect the Proton prefix by scanning recently modified prefixes for the game's exe. On Linux, only the prefix App ID is stored in the local config — paths are re-derived from the shared config at runtime. On Windows, absolute paths are stored locally because they vary by username and install location.
+- *Native Steam game on Linux*: the save path is resolved automatically from the App ID; no exe path is needed (Steam provides it at launch).
 
 Clicking **Assign** will:
 - Register this machine in the local config and push the updated `games.json`
 - Create the save symlink (Linux) or record the save path (Windows)
 - Run an initial sync
-- Rewrite the Steam shortcut's Launch Options
+- Rewrite the Steam shortcut Launch Options (non-Steam shortcut) or the game's Steam Launch Options (native Steam)
 - Download any artwork stored on the cloud for the game
 
 Restart Steam when prompted.
@@ -277,7 +300,6 @@ ExternalGameSync/                   <- root on your cloud storage remote
 }
 ```
 
-Paths use Windows-style separators and are relative to the Proton prefix `drive_c`, so they work on any Linux machine where the game is installed under the same path. On Windows, absolute paths are stored in the local config instead.
 
 ### Local machine config
 
@@ -307,8 +329,6 @@ On Windows, absolute exe and save paths are also stored since they vary by usern
   }
 }
 ```
-
-This separation keeps `games.json` clean and shareable — adding a new machine never touches the cloud config.
 
 ---
 
