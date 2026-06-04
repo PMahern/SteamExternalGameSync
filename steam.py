@@ -196,6 +196,107 @@ def get_non_steam_games(shortcuts_data: dict) -> list[dict]:
 
 # ── Launch wrappers ───────────────────────────────────────────────────────────
 
+_WIN_WRAPPER_PRELAUNCHER_TEMPLATE = '''\
+import subprocess, sys, os, threading, time
+
+SYNC_SCRIPT  = {sync_script!r}
+GAME_ID      = {game_id!r}
+GAME_NAME    = {game_name!r}
+PRELAUNCHER  = {prelauncher_exe!r}
+DISC_IMAGE   = {disc_image!r}
+CNW          = 0x08000000
+
+_tmp = os.environ.get('TEMP') or os.environ.get('TMP') or os.path.join(
+    os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'Temp')
+STATUS_FILE     = os.path.join(_tmp, 'egs_status.txt')
+CHOICE_FILE     = os.path.join(_tmp, 'egs_choice.txt')
+READY_FILE      = os.path.join(_tmp, 'egs_ready.txt')
+CANCEL_FILE     = os.path.join(_tmp, 'egs_cancelled.txt')
+PUSH_START_FILE = os.path.join(_tmp, 'egs_push_start.txt')
+PUSH_DONE_FILE  = os.path.join(_tmp, 'egs_push_done.txt')
+
+def _rm(p):
+    try: os.remove(p)
+    except FileNotFoundError: pass
+
+def _touch(p):
+    with open(p, 'w') as f: f.write('ok\\n')
+
+for _f in [STATUS_FILE, CHOICE_FILE, READY_FILE, CANCEL_FILE, PUSH_START_FILE, PUSH_DONE_FILE]:
+    _rm(_f)
+
+if DISC_IMAGE:
+    subprocess.run(
+        ['powershell', '-NoProfile', '-Command',
+         'Mount-DiskImage -ImagePath "' + DISC_IMAGE + '" -ErrorAction SilentlyContinue'],
+        creationflags=CNW, check=False)
+
+_game_exe = sys.argv[1] if len(sys.argv) > 1 else ''
+with open(STATUS_FILE, 'w') as _sf:
+    _sf.write('STATUS=syncing\\nGAME=' + GAME_NAME + '\\nGAME_EXE=' + _game_exe + '\\n')
+
+def _sync_handler():
+    rc = subprocess.run(
+        [sys.executable, SYNC_SCRIPT, 'pre-launch', GAME_ID, STATUS_FILE, _game_exe],
+        creationflags=CNW).returncode
+    if rc == 1:
+        _touch(READY_FILE)
+        for _ in range(600):
+            if os.path.exists(CHOICE_FILE) or os.path.exists(CANCEL_FILE):
+                break
+            time.sleep(0.5)
+        if os.path.exists(CANCEL_FILE):
+            return
+        if os.path.exists(CHOICE_FILE):
+            try:
+                with open(CHOICE_FILE) as _cf: _choice = _cf.read().strip()
+                _rm(CHOICE_FILE)
+            except OSError:
+                _choice = ''
+            if _choice in ('remote', 'local'):
+                subprocess.run(
+                    [sys.executable, SYNC_SCRIPT, 'pull-force', GAME_ID, '--keep=' + _choice],
+                    creationflags=CNW)
+    _touch(READY_FILE)
+
+def _push_handler():
+    for _ in range(172800):
+        if os.path.exists(PUSH_START_FILE) or os.path.exists(CANCEL_FILE):
+            break
+        time.sleep(0.5)
+    if os.path.exists(CANCEL_FILE):
+        return
+    if not os.path.exists(PUSH_START_FILE):
+        return
+    _rm(PUSH_START_FILE)
+    subprocess.run([sys.executable, SYNC_SCRIPT, 'push', GAME_ID], creationflags=CNW)
+    _touch(PUSH_DONE_FILE)
+
+_t_sync = threading.Thread(target=_sync_handler, daemon=True)
+_t_push = threading.Thread(target=_push_handler, daemon=True)
+_t_sync.start()
+_t_push.start()
+
+_proc = subprocess.Popen([PRELAUNCHER])
+_exit_code = _proc.wait()
+
+if not os.path.exists(CANCEL_FILE):
+    try: _touch(PUSH_START_FILE)
+    except OSError: pass
+
+_t_sync.join(timeout=30)
+_t_push.join(timeout=300)
+
+if DISC_IMAGE:
+    subprocess.run(
+        ['powershell', '-NoProfile', '-Command',
+         'Dismount-DiskImage -ImagePath "' + DISC_IMAGE + '" -ErrorAction SilentlyContinue'],
+        creationflags=CNW, check=False)
+
+sys.exit(_exit_code)
+'''
+
+
 _WIN_WRAPPER_TEMPLATE = '''\
 import subprocess, sys, time, ctypes, ctypes.wintypes as wt, threading
 
@@ -306,15 +407,22 @@ sys.exit(exit_code)
 
 
 def _write_launch_wrapper_win(game_name: str, savesync_bat: str,
-                              disc_image: str = "") -> str:
+                              disc_image: str = "",
+                              game_id: str = "",
+                              prelauncher_exe: str = "") -> str:
     wrapper_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ExternalGameSync" / "wrappers"
     wrapper_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name    = game_id_from_name(game_name)
     wrapper_path = wrapper_dir / f"{safe_name}.py"
     sync_script  = str(Path(savesync_bat).parent / "externalgamesync.py")
-    script       = _WIN_WRAPPER_TEMPLATE.format(
-        sync_script=sync_script, game_name=game_name, disc_image=disc_image)
+    if game_id and prelauncher_exe:
+        script = _WIN_WRAPPER_PRELAUNCHER_TEMPLATE.format(
+            sync_script=sync_script, game_id=game_id, game_name=game_name,
+            prelauncher_exe=prelauncher_exe, disc_image=disc_image)
+    else:
+        script = _WIN_WRAPPER_TEMPLATE.format(
+            sync_script=sync_script, game_name=game_name, disc_image=disc_image)
     wrapper_path.write_text(script)
     log(f"Wrote launch wrapper: {wrapper_path}")
     return str(wrapper_path)
@@ -745,8 +853,13 @@ def update_shortcut_launch(
         disc_image = disc_image_override if disc_image_override is not None else (mc or {}).get("disc_image", "")
 
         if sys.platform == "win32":
+            _gid        = (game_cfg or {}).get("id", game_id_from_name(game_name))
+            _pl_path    = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ExternalGameSync" / "pre-launcher.exe"
+            _pl_exe     = str(_pl_path) if _pl_path.exists() else ""
             wrapper_path = _write_launch_wrapper_win(game_name, savesync_bin,
-                                                     disc_image=disc_image)
+                                                     disc_image=disc_image,
+                                                     game_id=_gid,
+                                                     prelauncher_exe=_pl_exe)
             pythonw = str(Path(sys.executable).parent / "pythonw.exe")
             set_key("Exe", f'"{pythonw}"')
             if real_exe:

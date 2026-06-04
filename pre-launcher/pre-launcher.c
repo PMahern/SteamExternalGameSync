@@ -8,7 +8,7 @@
  *   x86_64-w64-mingw32-gcc -O2 -mwindows -Wall -static-libgcc -o pre-launcher.exe pre-launcher.c -lgdi32 -lmsimg32
  *
  * Build (MSVC Developer PowerShell):
- *   cl /O2 /W3 pre-launcher.c user32.lib gdi32.lib /Fe:pre-launcher.exe /link /subsystem:windows
+ *   cl /O2 /W3 pre-launcher.c user32.lib gdi32.lib msimg32.lib /Fe:pre-launcher.exe /link /subsystem:windows
  *
  * IPC files (all inside %TEMP%):
  *   egs_status.txt     - STATUS / GAME / GAME_EXE written by wrapper.sh before launch
@@ -136,8 +136,9 @@ static void diag_exe(const char *exe)
 
 /* ── Runtime scaling (all sizes in "base 1080p pixels", scaled at startup) ─ */
 
-static int g_sw = 1920, g_sh = 1080;  /* screen dimensions */
-static int g_scale_n = 1, g_scale_d = 1; /* scale as integer fraction n/d */
+static int  g_sw = 1920, g_sh = 1080;  /* window/screen dimensions used for rendering */
+static int  g_scale_n = 1, g_scale_d = 1; /* scale as integer fraction n/d */
+static BOOL g_windowed = FALSE; /* TRUE: small centered dialog; FALSE: fullscreen */
 
 /* Scale a base-1080p value */
 static int S(int base) { return base * g_scale_n / g_scale_d; }
@@ -145,13 +146,32 @@ static int S(int base) { return base * g_scale_n / g_scale_d; }
 /* Scale a base-1080p font point size */
 static int SF(int pt) { return S(pt); }
 
+/* Fullscreen only in Steam Gaming Mode (gamescope/SteamOS).
+ * Native Windows (no STEAM_COMPAT_DATA_PATH) and Linux desktop both get the
+ * small windowed dialog. */
+static BOOL is_gaming_mode(void)
+{
+    char compat[MAX_PATH] = {0};
+    if (!GetEnvironmentVariableA("STEAM_COMPAT_DATA_PATH", compat, sizeof(compat)) || !compat[0])
+        return FALSE; /* native Windows — always windowed */
+    char val[16] = {0};
+    GetEnvironmentVariableA("STEAM_GAMEPADUI", val, sizeof(val));
+    return val[0] != '\0' && val[0] != '0';
+}
+
 static void init_scale(void)
 {
-    g_sw = GetSystemMetrics(SM_CXSCREEN);
-    g_sh = GetSystemMetrics(SM_CYSCREEN);
-    /* Use height to drive scale; maintain integer ratio for crisp fonts */
-    g_scale_n = g_sh;
-    g_scale_d = 1080;
+    g_windowed = !is_gaming_mode();
+    if (g_windowed) {
+        g_sw = 800; g_sh = 600;
+        g_scale_n = 1; g_scale_d = 1;
+    } else {
+        g_sw = GetSystemMetrics(SM_CXSCREEN);
+        g_sh = GetSystemMetrics(SM_CYSCREEN);
+        /* Use height to drive scale; maintain integer ratio for crisp fonts */
+        g_scale_n = g_sh;
+        g_scale_d = 1080;
+    }
 }
 
 /* ── Colours ─────────────────────────────────────────────────────────────── */
@@ -518,9 +538,9 @@ static void paint(HWND hwnd)
     /* full-screen background */
     fill(mem, 0, 0, g_sw, g_sh, C_BG);
 
-    /* centered content panel */
-    int pw = g_sw * 7 / 10;   /* 70% of screen width */
-    int ph = g_sh * 6 / 10;   /* 60% of screen height */
+    /* windowed: panel fills the whole window; fullscreen: centered 70%×60% panel */
+    int pw = g_windowed ? g_sw : g_sw * 7 / 10;
+    int ph = g_windowed ? g_sh : g_sh * 6 / 10;
     int px = (g_sw - pw) / 2;
     int py = (g_sh - ph) / 2;
 
@@ -877,11 +897,16 @@ static int run_dialog(HINSTANCE hInst, BOOL ready_timer)
 
     g_done = -1;
 
+    int wx = 0, wy = 0;
+    if (g_windowed) {
+        wx = (GetSystemMetrics(SM_CXSCREEN) - g_sw) / 2;
+        wy = (GetSystemMetrics(SM_CYSCREEN) - g_sh) / 2;
+    }
     HWND hwnd = CreateWindowExA(
         WS_EX_TOPMOST | WS_EX_APPWINDOW,
         "EGSDialog", "ExternalGameSync",
         WS_POPUP | WS_VISIBLE,
-        0, 0, g_sw, g_sh,
+        wx, wy, g_sw, g_sh,
         NULL, NULL, hInst, NULL);
     diag("run_dialog: CreateWindowExA hwnd=%p err=%lu screen=%dx%d phase=%d",
          hwnd, GetLastError(), g_sw, g_sh, (int)g_phase);

@@ -32,6 +32,16 @@ foreach ($f in @('install.bat', 'install.ps1')) {
 }
 Write-Host "[ok] Installed app files to $installDir"
 
+# ── 2b. pre-launcher binary ───────────────────────────────────────────────────
+$preLauncherSrc = "$scriptDir\pre-launcher\pre-launcher.exe"
+if (Test-Path $preLauncherSrc) {
+    Copy-Item $preLauncherSrc "$installDir\pre-launcher.exe" -Force
+    Write-Host "[ok] Installed pre-launcher.exe"
+} else {
+    Write-Host "[warn] pre-launcher\pre-launcher.exe not found - sync dialogs will fall back to minimal UI"
+    Write-Host "       To build it: cl /O2 /W3 pre-launcher\pre-launcher.c user32.lib gdi32.lib /Fe:pre-launcher\pre-launcher.exe"
+}
+
 # ── 3. Create launcher batch file ─────────────────────────────────────────────
 Set-Content "$installDir\externalgamesync.bat" "@echo off`r`npython `"$installDir\externalgamesync.py`" %*" -Encoding ASCII
 Write-Host "[ok] Created launcher: $installDir\externalgamesync.bat"
