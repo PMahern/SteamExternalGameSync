@@ -407,11 +407,6 @@ static int run_wait(const char *exe)
     }
     diag("run_wait: job=%p iocp=%p", job, iocp);
 
-    /* Allow the game process to become foreground immediately, preventing
-     * Steam's Big Picture overlay from grabbing focus during the transition. */
-    LockSetForegroundWindow(LSFW_UNLOCK);
-    AllowSetForegroundWindow(ASFW_ANY);
-
     STARTUPINFOA si={sizeof(si)}; PROCESS_INFORMATION pi={0};
     DWORD flags = NORMAL_PRIORITY_CLASS | (job ? CREATE_SUSPENDED : 0);
     if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, flags,
