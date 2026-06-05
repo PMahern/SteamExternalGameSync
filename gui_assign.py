@@ -340,6 +340,10 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
         auto_exe, auto_save = try_resolve_windows_paths(game_cfg)
         auto_exe_val  = str(auto_exe)  if auto_exe  else ""
         auto_save_val = str(auto_save) if auto_save else ""
+        if not auto_save_val and native_steam:
+            candidates = win_save_candidates(game_cfg.get("save_path", ""))
+            if candidates:
+                auto_save_val = str(candidates[0])
         dpg.add_input_text(tag=aid_tag, default_value=native_app_id or "",
                            width=1, show=False, parent="content_group")
     else:
@@ -410,12 +414,12 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
             dpg.set_value("_detect_err", f"Game exe not found in prefix {aid}.")
             dpg.configure_item("_detect_err", show=True)
 
+    dpg.add_text("", tag="_detect_ok", parent="content_group",
+                 color=(45, 164, 78), wrap=700, show=False)
     if sys.platform != "win32":
         dpg.add_button(label="Auto-detect paths from selected prefix",
                        callback=_autodetect, width=-1, height=28,
                        parent="content_group")
-        dpg.add_text("", tag="_detect_ok",  parent="content_group",
-                     color=(45, 164, 78),  wrap=700, show=False)
         dpg.add_text("", tag="_detect_err", parent="content_group",
                      color=(207, 34, 46),  wrap=700, show=False)
         dpg.add_spacer(height=4, parent="content_group")
@@ -444,7 +448,7 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
             return str(r) if r.exists() else str(proton_drive_c(aid))
         return str(Path.home())
 
-    if native_steam and sys.platform != "win32":
+    if native_steam:
         dpg.add_text(
             "Executable: provided automatically by Steam at launch -- no path needed.",
             parent="content_group", color=(130, 130, 155),
@@ -455,6 +459,9 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
         add_path_row("Executable", exe_tag, False, _exe_start)
     add_path_row("Save folder", save_tag, True, _save_start)
     dpg.add_text(
+        "Save folder not found yet, it will likely be created"
+        " the first time you save in game."
+        if sys.platform == "win32" else
         "Save folder not found in this prefix yet, it will likely be created"
         " the first time you save in game.",
         tag="_detect_nosave", parent="content_group", color=(200, 170, 80),
@@ -472,12 +479,14 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
         dpg.configure_item("_detect_ok", show=True)
         if auto_save_val and not Path(auto_save_val).exists():
             dpg.configure_item("_detect_nosave", show=True)
-    if native_steam and native_app_id and not auto_exe_val:
-        game_dir = find_steam_game_dir(native_app_id)
-        hint = str(game_dir) if game_dir else "your Steam library's common folder"
+    if sys.platform == "win32" and native_steam and auto_save_val:
+        exists = Path(auto_save_val).exists()
         dpg.set_value("_detect_ok",
-                      f"Browse to the game .exe in: {hint}")
+                      "Save path pre-filled." if exists
+                      else "Save path pre-filled (folder not yet created -- normal before first play).")
         dpg.configure_item("_detect_ok", show=True)
+        if not exists:
+            dpg.configure_item("_detect_nosave", show=True)
 
     if sys.platform != "win32":
         dpg.add_spacer(height=4, parent="content_group")
@@ -499,7 +508,7 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
     def _run():
         exe_p  = dpg.get_value(exe_tag).strip() if dpg.does_item_exist(exe_tag) else ""
         save_p = dpg.get_value(save_tag).strip()
-        if (not exe_p and not (native_steam and sys.platform != "win32")) or not save_p:
+        if (not exe_p and not native_steam) or not save_p:
             return
         exe_real  = Path(exe_p) if exe_p else None
         save_real = Path(save_p)
@@ -509,8 +518,9 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
             else:
                 raw = ns_entry.get("appid") or 0
                 aid = str(raw & 0xFFFFFFFF) if raw else None
-            mc  = {"platform": "windows", "exe_path": str(exe_real),
-                   "save_path": str(save_real), "app_id": aid}
+            mc = {"platform": "windows", "save_path": str(save_real), "app_id": aid}
+            if exe_real:
+                mc["exe_path"] = str(exe_real)
             if native_steam:
                 mc["native_steam"] = True
             ev = None
@@ -557,17 +567,17 @@ def _assign_run(game_cfg, ns_entry, shortcuts_data, vdf_path,
             ok, msg = make_save_symlink(game_cfg["id"], steam_app_id, save_rel)
             log.append((f"Save symlink {'created' if ok else 'failed'}: {msg}", ok))
 
-        ok1, _ = rclone_sync_pull(game_cfg["id"], game_cfg)
-        ok2, _ = rclone_sync_push(game_cfg["id"], game_cfg)
-        log.append(("Initial sync", ok1 and ok2))
-
-        # Write local config before updating the shortcut/launch options so that
-        # update_shortcut_launch can read app_id from it for pre-launcher installation.
+        # Save machine config before pull/push so get_local_save_path resolves
+        # the correct Windows save directory (not the SYNC_ROOT fallback).
         if disc_image:
             machine_cfg["disc_image"] = disc_image
         elif "disc_image" in machine_cfg:
             del machine_cfg["disc_image"]
         set_local_config(game_cfg["id"], machine_cfg)
+
+        ok1, _ = rclone_sync_pull(game_cfg["id"], game_cfg)
+        ok2, _ = rclone_sync_push(game_cfg["id"], game_cfg)
+        log.append(("Initial sync", ok1 and ok2))
 
         if native_steam:
             ok3, msg3 = update_native_game_launch(

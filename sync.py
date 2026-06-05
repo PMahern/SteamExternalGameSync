@@ -460,6 +460,15 @@ def rclone_sync_push(game_id: str, game: dict | None = None) -> tuple[bool, str]
             log_err(msg)
             return False, "failed"
 
+    last_local = _load_local_snapshot(game_id)
+    if last_local:
+        current_local = _take_local_snapshot(game_id, game)
+        if not current_local:
+            msg = (f"push blocked for '{game_id}': local save folder is empty but previous sync had files — "
+                   f"run pull first to restore saves before pushing")
+            log_err(msg)
+            return False, "push blocked (local empty, cloud has saves)"
+
     try:
         _run([rclone_cmd(), "mkdir", remote_path], capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:

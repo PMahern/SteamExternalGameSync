@@ -1136,9 +1136,15 @@ def update_native_game_launch(
     disc_image = disc_image_override if disc_image_override is not None else (mc or {}).get("disc_image", "")
 
     if sys.platform == "win32":
-        wrapper_path = _write_launch_wrapper_win(game_name, savesync_bin, disc_image=disc_image)
-        pythonw      = str(Path(sys.executable).parent / "pythonw.exe")
-        launch_opts  = f'"{pythonw}" "{wrapper_path}" %command%'
+        _gid     = (game_cfg or {}).get("id", game_id_from_name(game_name))
+        _pl_path = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ExternalGameSync" / "pre-launcher.exe"
+        _pl_exe  = str(_pl_path) if _pl_path.exists() else ""
+        wrapper_path = _write_launch_wrapper_win(game_name, savesync_bin,
+                                                  disc_image=disc_image,
+                                                  game_id=_gid,
+                                                  prelauncher_exe=_pl_exe)
+        pythonw     = str(Path(sys.executable).parent / "pythonw.exe")
+        launch_opts = f'"{pythonw}" "{wrapper_path}" %command%'
     else:
         game_id      = (game_cfg or {}).get("id", game_id_from_name(game_name))
         exe_path     = (game_cfg or {}).get("exe_path", "")

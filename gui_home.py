@@ -6,8 +6,12 @@ from __future__ import annotations
 
 import dearpygui.dearpygui as dpg
 
+import os
+import subprocess
+import sys
+
 from config import is_configured
-from games import load_games
+from games import load_games, get_local_save_path
 from machine_config import get_local_config
 import rclone as rclone_mod
 from gui_common import (
@@ -118,6 +122,7 @@ def refresh_and_home(warning: str | None = None, info: str | None = None):
             dpg.add_table_column(label="Game",     width_stretch=True, init_width_or_weight=5.0)
             dpg.add_table_column(label="Platform", width_stretch=True, init_width_or_weight=2.0)
             dpg.add_table_column(label="Status",   width_stretch=True, init_width_or_weight=2.0)
+            dpg.add_table_column(label="",         width_stretch=True, init_width_or_weight=1.5)
 
             for g in games:
                 mc   = get_local_config(g["id"])
@@ -130,6 +135,13 @@ def refresh_and_home(warning: str | None = None, info: str | None = None):
                                      color=(130, 130, 155))
                     else:
                         dpg.add_text("--", color=(130, 130, 155))
+                    if mc:
+                        save_path = get_local_save_path(g["id"], g)
+                        dpg.add_button(label="Open saves", width=90, height=20,
+                                       user_data=save_path,
+                                       callback=lambda s, a, u: _open_folder(u))
+                    else:
+                        dpg.add_text("")
 
         # Check sync status sequentially — dpg.set_frame_callback only holds one
         # callback per frame slot, so concurrent run_async calls overwrite each other.
@@ -182,6 +194,16 @@ def refresh_and_home(warning: str | None = None, info: str | None = None):
                        callback=pull_then_home)
         dpg.add_button(label="Sync Artwork", width=130, height=32,
                        callback=_flow_sync_art_deferred)
+
+
+def _open_folder(path) -> None:
+    from pathlib import Path
+    p = Path(path)
+    p.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        os.startfile(str(p))
+    else:
+        subprocess.Popen(["xdg-open", str(p)])
 
 
 def _flow_sync_art_deferred():
