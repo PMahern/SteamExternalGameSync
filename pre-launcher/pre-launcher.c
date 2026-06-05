@@ -146,22 +146,20 @@ static int S(int base) { return base * g_scale_n / g_scale_d; }
 /* Scale a base-1080p font point size */
 static int SF(int pt) { return S(pt); }
 
-/* Fullscreen only in Steam Gaming Mode (gamescope/SteamOS).
- * Native Windows (no STEAM_COMPAT_DATA_PATH) and Linux desktop both get the
- * small windowed dialog. */
-static BOOL is_gaming_mode(void)
+/* Env-var fallback: native Windows always gets windowed mode.
+ * This is a last-resort check; the shell wrapper's FULLSCREEN= field is
+ * the reliable signal for the Linux/Proton path. */
+static BOOL is_native_windows(void)
 {
     char compat[MAX_PATH] = {0};
-    if (!GetEnvironmentVariableA("STEAM_COMPAT_DATA_PATH", compat, sizeof(compat)) || !compat[0])
-        return FALSE; /* native Windows — always windowed */
-    char val[16] = {0};
-    GetEnvironmentVariableA("STEAM_GAMEPADUI", val, sizeof(val));
-    return val[0] != '\0' && val[0] != '0';
+    return !GetEnvironmentVariableA("STEAM_COMPAT_DATA_PATH", compat, sizeof(compat)) || !compat[0];
 }
 
-static void init_scale(void)
+/* fullscreen_hint: 1 = status file said fullscreen, 0 = not present/zero.
+ * On native Windows we always stay windowed regardless of the hint. */
+static void init_scale(int fullscreen_hint)
 {
-    g_windowed = !is_gaming_mode();
+    g_windowed = is_native_windows() || !fullscreen_hint;
     if (g_windowed) {
         g_sw = 800; g_sh = 600;
         g_scale_n = 1; g_scale_d = 1;
@@ -286,7 +284,7 @@ static void icon_free(void)
 #define MAX_VAL   4096
 #define MAX_PATH2 (MAX_PATH * 2)
 
-typedef struct { char status[64]; char game[512]; char game_exe[MAX_VAL]; char last_status[64]; } EgsStatus;
+typedef struct { char status[64]; char game[512]; char game_exe[MAX_VAL]; char last_status[64]; int fullscreen; } EgsStatus;
 
 /* File that ready_exists() / wait_ready() polls — set before each run_dialog call */
 static char g_ready_poll[MAX_PATH2] = {0};
@@ -332,6 +330,7 @@ static void read_status(EgsStatus *s)
         if (!strcmp(k,"GAME"))        strncpy(s->game,       v,sizeof(s->game)       -1);
         if (!strcmp(k,"GAME_EXE"))    strncpy(s->game_exe,   v,sizeof(s->game_exe)   -1);
         if (!strcmp(k,"LAST_STATUS")) strncpy(s->last_status,v,sizeof(s->last_status)-1);
+        if (!strcmp(k,"FULLSCREEN"))  s->fullscreen = (v[0] == '1');
     }
     fclose(f);
 }
@@ -416,6 +415,11 @@ static int run_wait(const char *exe)
                                 &jacp, sizeof(jacp));
     }
     diag("run_wait: job=%p iocp=%p", job, iocp);
+
+    /* Allow the game process to become foreground immediately, preventing
+     * Steam's Big Picture overlay from grabbing focus during the transition. */
+    LockSetForegroundWindow(LSFW_UNLOCK);
+    AllowSetForegroundWindow(ASFW_ANY);
 
     STARTUPINFOA si={sizeof(si)}; PROCESS_INFORMATION pi={0};
     DWORD flags = NORMAL_PRIORITY_CLASS | (job ? CREATE_SUSPENDED : 0);
@@ -1004,12 +1008,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     (void)hPrev; (void)lpCmd; (void)nShow;
 
     diag_open();
-    init_scale();
+
+    /* Read status file first so FULLSCREEN= can inform init_scale() */
+    EgsStatus s = {0};
+    read_status(&s);
+
+    init_scale(s.fullscreen);
     xi_init();
     icon_load();
 
     diag("=== startup ===");
-    diag("screen: %dx%d  scale: %d/%d", g_sw, g_sh, g_scale_n, g_scale_d);
+    diag("screen: %dx%d  scale: %d/%d  windowed=%d  fullscreen_hint=%d",
+         g_sw, g_sh, g_scale_n, g_scale_d, (int)g_windowed, s.fullscreen);
     diag("icon_bmp: %p  %dx%d", g_icon_bmp, g_icon_w, g_icon_h);
     diag("xi: %p", g_xi);
 
@@ -1017,6 +1027,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     diag_env("STEAM_COMPAT_DATA_PATH");
     diag_env("STEAM_COMPAT_CLIENT_INSTALL_PATH");
     diag_env("SteamAppId");
+    diag_env("STEAM_GAMEPADUI");
+    diag_env("SteamGamepadUI");
+    diag_env("GAMESCOPE_WAYLAND_DISPLAY");
     diag_env("TEMP");
     diag_env("TMP");
     diag_env("SystemRoot");
@@ -1026,12 +1039,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
     diag("--- drives ---");
     diag_drives();
 
-    EgsStatus s = {0};
-    read_status(&s);
     diag("--- status file ---");
     diag("STATUS=%s", s.status);
     diag("GAME=%s",   s.game);
     diag("LAST_STATUS=%s", s.last_status);
+    diag("FULLSCREEN=%d", s.fullscreen);
 
     diag("--- game exe ---");
     diag_exe(s.game_exe);

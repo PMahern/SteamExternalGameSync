@@ -232,8 +232,38 @@ if DISC_IMAGE:
         creationflags=CNW, check=False)
 
 _game_exe = sys.argv[1] if len(sys.argv) > 1 else ''
+
+def _is_bigpicture():
+    if os.environ.get('STEAM_GAMEPADUI','0') == '1': return True
+    if os.environ.get('SteamGamepadUI','0') == '1': return True
+    try:
+        import ctypes, ctypes.wintypes as _wt
+        _u = ctypes.windll.user32
+        _found = [False]
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, _wt.HWND, _wt.LPARAM)
+        def _cb(hwnd, _):
+            if not _u.IsWindowVisible(hwnd): return True
+            _cls = ctypes.create_string_buffer(64)
+            _u.GetClassNameA(hwnd, _cls, 64)
+            if _cls.value not in (b'SDL_app', b'CUIEngineWin32'): return True
+            _wr = _wt.RECT(); _u.GetWindowRect(hwnd, ctypes.byref(_wr))
+            _hm = _u.MonitorFromWindow(hwnd, 2)
+            class _MI(ctypes.Structure):
+                _fields_ = [('cb',_wt.DWORD),('m',_wt.RECT),('w',_wt.RECT),('f',_wt.DWORD)]
+            _mi = _MI(); _mi.cb = ctypes.sizeof(_MI)
+            if _u.GetMonitorInfoA(_hm, ctypes.byref(_mi)):
+                _m = _mi.m
+                if _wr.left<=_m.left and _wr.top<=_m.top and _wr.right>=_m.right and _wr.bottom>=_m.bottom:
+                    _found[0] = True; return False
+            return True
+        _u.EnumWindows(_cb, 0)
+        return _found[0]
+    except Exception:
+        return False
+
 with open(STATUS_FILE, 'w') as _sf:
-    _sf.write('STATUS=syncing\\nGAME=' + GAME_NAME + '\\nGAME_EXE=' + _game_exe + '\\n')
+    _sf.write('STATUS=syncing\\nGAME=' + GAME_NAME + '\\nGAME_EXE=' + _game_exe
+              + '\\nFULLSCREEN=' + ('1' if _is_bigpicture() else '0') + '\\n')
 
 def _sync_handler():
     rc = subprocess.run(
@@ -559,10 +589,32 @@ if [ -n "$PRELAUNCHER" ]; then
     fi
 fi
 
+# Detect gaming/Big Picture mode on the Linux side where env vars are reliable.
+# GAMESCOPE_WAYLAND_DISPLAY is set by gamescope (SteamOS/Bazzite gaming mode).
+# STEAM_GAMEPADUI is set by Steam when it propagates the flag to child processes.
+# On desktop Linux (e.g. Mint), Steam may not propagate these vars, so fall back
+# to reading Steam's own process environment and cmdline via /proc.
+_FULLSCREEN=0
+[ -n "$GAMESCOPE_WAYLAND_DISPLAY" ] && _FULLSCREEN=1
+[ "${{STEAM_GAMEPADUI:-0}}" = "1" ] && _FULLSCREEN=1
+[ "${{SteamGamepadUI:-0}}" = "1" ] && _FULLSCREEN=1
+if [ "$_FULLSCREEN" = "0" ]; then
+    for _spid in $(pgrep -x steam 2>/dev/null); do
+        if tr '\\0' '\\n' < "/proc/$_spid/environ" 2>/dev/null \
+               | grep -qxE 'STEAM_GAMEPADUI=1|SteamGamepadUI=1'; then
+            _FULLSCREEN=1; break
+        fi
+        if tr '\\0' '\\n' < "/proc/$_spid/cmdline" 2>/dev/null \
+               | grep -qxE -- '-gamepadui|-bigpicture'; then
+            _FULLSCREEN=1; break
+        fi
+    done
+fi
+
 # Status file: for native Steam, pass the runtime-extracted game exe so
 # pre-launcher can launch it directly (same as non-Steam shortcut flow).
 # For non-Steam shortcuts GAME_EXE_WIN is set at generation time; _RUNTIME_GAME_EXE is empty.
-printf 'STATUS=syncing\\nGAME={game_name}\\nGAME_EXE=%s\\n' "${{_RUNTIME_GAME_EXE:-$GAME_EXE_WIN}}" > "$STATUS_FILE"
+printf 'STATUS=syncing\\nGAME={game_name}\\nGAME_EXE=%s\\nFULLSCREEN=%s\\n' "${{_RUNTIME_GAME_EXE:-$GAME_EXE_WIN}}" "$_FULLSCREEN" > "$STATUS_FILE"
 
 # Start sync handler in background before anything else
 _sync_handler &
