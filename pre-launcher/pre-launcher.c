@@ -146,20 +146,11 @@ static int S(int base) { return base * g_scale_n / g_scale_d; }
 /* Scale a base-1080p font point size */
 static int SF(int pt) { return S(pt); }
 
-/* Env-var fallback: native Windows always gets windowed mode.
- * This is a last-resort check; the shell wrapper's FULLSCREEN= field is
- * the reliable signal for the Linux/Proton path. */
-static BOOL is_native_windows(void)
-{
-    char compat[MAX_PATH] = {0};
-    return !GetEnvironmentVariableA("STEAM_COMPAT_DATA_PATH", compat, sizeof(compat)) || !compat[0];
-}
-
-/* fullscreen_hint: 1 = status file said fullscreen, 0 = not present/zero.
- * On native Windows we always stay windowed regardless of the hint. */
+/* fullscreen_hint comes from FULLSCREEN= in the status file, written by the
+ * wrapper before launching this process.  Default (no status file) is windowed. */
 static void init_scale(int fullscreen_hint)
 {
-    g_windowed = is_native_windows() || !fullscreen_hint;
+    g_windowed = !fullscreen_hint;
     if (g_windowed) {
         g_sw = 800; g_sh = 600;
         g_scale_n = 1; g_scale_d = 1;
