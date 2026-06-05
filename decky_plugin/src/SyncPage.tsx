@@ -71,7 +71,7 @@ function getStatusDisplay(g: GameSyncState, statusesLoaded: boolean): { label: s
       g.msg ? `error: ${g.msg}` : 'error';
     return { label, color: STATUS_COLORS[g.status] };
   }
-  if (!statusesLoaded) return { label: '...', color: '#8899a6' };
+  if (!statusesLoaded) return { label: 'checking...', color: '#8899a6' };
   if (!g.syncStatus)   return { label: '',    color: '#8899a6' };
   const ss = SYNC_STATUS[g.syncStatus];
   if (g.syncStatus === 'no_connection' || g.syncStatus === 'error') {
@@ -94,6 +94,8 @@ function leftBorderColor(g: GameSyncState): string {
 
 // ── Page component ────────────────────────────────────────────────────────────
 
+const STATUS_CHECK_TIMEOUT_MS = 30_000;
+
 export default function SyncPage() {
   const [gameStates, setGameStates]         = useState<GameSyncState[]>([]);
   const [isSyncingAll, setIsSyncingAll]     = useState(false);
@@ -112,7 +114,12 @@ export default function SyncPage() {
         const assigned = games.filter(g => g.assigned);
         setGameStates(assigned.map(g => ({ id: g.id, name: g.name, status: 'idle' })));
         setLoaded(true);
-        getSyncStatuses()
+        Promise.race([
+          getSyncStatuses(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), STATUS_CHECK_TIMEOUT_MS),
+          ),
+        ])
           .then(statuses => {
             setGameStates(prev => prev.map(g => {
               const entry = statuses[g.id];
@@ -123,7 +130,9 @@ export default function SyncPage() {
               };
             }));
           })
-          .catch(() => {})
+          .catch(() => {
+            setGameStates(prev => prev.map(g => ({ ...g, syncStatus: 'no_connection' as SyncStatusType })));
+          })
           .finally(() => setStatusesLoaded(true));
       })
       .catch(() => setLoaded(true));

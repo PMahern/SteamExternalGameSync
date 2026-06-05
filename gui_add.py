@@ -11,7 +11,7 @@ from pathlib import Path
 import dearpygui.dearpygui as dpg
 
 from machine_config import get_local_config, set_local_config
-from games import load_games, save_games, game_id_from_name
+from games import load_games, save_games, game_id_from_name, hash_file
 import rclone as rclone_mod
 from sync import rclone_sync_pull, rclone_sync_push
 from steam import (
@@ -619,6 +619,22 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
             "env_vars":    env_vars,
             "added":       datetime.datetime.now().isoformat(),
         }
+        if exe_real and exe_real.is_file():
+            try:
+                new_cfg["exe_hashes"] = [hash_file(exe_real)]
+            except Exception:
+                pass
+
+        if sys.platform == "win32" and not native_steam and ns_entry:
+            shortcut_exe_str = ns_entry.get("exe", "").strip().strip('"')
+            if shortcut_exe_str:
+                shortcut_exe = Path(shortcut_exe_str)
+                if shortcut_exe.is_file() and shortcut_exe.resolve() != exe_real.resolve():
+                    try:
+                        new_cfg["installer_hashes"] = [hash_file(shortcut_exe)]
+                    except Exception:
+                        pass
+
         set_local_config(game_id, mc)
         all_g.append(new_cfg)
         save_games(all_g)

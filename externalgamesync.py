@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import log, log_err, log_ok, LOG_FILE, SYNC_ROOT, hostname
-from games import find_game, load_games, save_games, get_local_save_path
+from games import find_game, load_games, save_games, get_local_save_path, hash_file, add_game_hash
 from machine_config import get_local_config, migrate_from_games_json
 from rclone import rclone_push_games_json
 from sync import (
@@ -497,6 +497,21 @@ def cmd_pre_launch(args):
             log_err(f"pre-launch: could not write status file: {e}")
 
     ok, msg = rclone_sync_pull(game_id, game)
+
+    if game_exe_win:
+        try:
+            if sys.platform == "win32":
+                exe_path = Path(game_exe_win)
+            elif game_exe_win.upper().startswith("Z:"):
+                exe_path = Path(game_exe_win[2:].replace("\\", "/"))
+            else:
+                exe_path = None
+            if exe_path and exe_path.is_file():
+                h = hash_file(exe_path)
+                if add_game_hash(game_id, h, "exe_hashes"):
+                    rclone_push_games_json()
+        except Exception as e:
+            log_err(f"pre-launch: exe hash update failed: {e}")
 
     if msg in (PULL_OK, PULL_NO_REMOTE):
         _write("ok")

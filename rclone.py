@@ -121,7 +121,11 @@ def rclone_test() -> tuple[bool, str]:
 
 def rclone_ensure_remote_folder() -> bool:
     """Create the ExternalGameSync folder on the remote if it doesn't exist."""
-    r = _run([rclone_cmd(), "mkdir", RCLONE_REMOTE], capture_output=True, text=True)
+    try:
+        r = _run([rclone_cmd(), "mkdir", RCLONE_REMOTE],
+                 capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return False
     return r.returncode == 0
 
 
@@ -130,10 +134,13 @@ def rclone_ensure_remote_folder() -> bool:
 def rclone_pull_games_json() -> tuple[bool, str]:
     """Copy games.json from remote to local SYNC_ROOT."""
     remote_file = f"{RCLONE_REMOTE}/games.json"
-    r = _run(
-        [rclone_cmd(), "copyto", remote_file, str(GAMES_JSON)],
-        capture_output=True, text=True
-    )
+    try:
+        r = _run(
+            [rclone_cmd(), "copyto", remote_file, str(GAMES_JSON)],
+            capture_output=True, text=True, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Connection timed out (30 s) — check VPN / server"
     if r.returncode != 0:
         if any(p in r.stderr.lower() for p in ("not found", "no such", "404", "doesn't exist", "does not exist")):
             return True, "no existing config (fresh start)"
@@ -169,7 +176,7 @@ def _fetch_remote_games() -> list[dict]:
     tmp = Path(tempfile.mktemp(suffix=".json"))
     try:
         r = _run([rclone_cmd(), "copyto", remote_file, str(tmp)],
-                 capture_output=True, text=True)
+                 capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             return []
         return json.loads(tmp.read_text()).get("games", [])
@@ -200,10 +207,13 @@ def rclone_push_games_json() -> tuple[bool, str]:
     if remote_games:
         merged = merge_games(load_games(), remote_games)
         save_games(merged)
-    r = _run(
-        [rclone_cmd(), "copyto", str(GAMES_JSON), remote_file],
-        capture_output=True, text=True
-    )
+    try:
+        r = _run(
+            [rclone_cmd(), "copyto", str(GAMES_JSON), remote_file],
+            capture_output=True, text=True, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Connection timed out (30 s) — check VPN / server"
     if r.returncode != 0:
         return False, r.stderr.strip()
     return True, ""

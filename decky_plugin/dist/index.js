@@ -58,7 +58,7 @@ function getStatusDisplay(g, statusesLoaded) {
         return { label, color: STATUS_COLORS[g.status] };
     }
     if (!statusesLoaded)
-        return { label: '...', color: '#8899a6' };
+        return { label: 'checking...', color: '#8899a6' };
     if (!g.syncStatus)
         return { label: '', color: '#8899a6' };
     const ss = SYNC_STATUS[g.syncStatus];
@@ -80,6 +80,7 @@ function leftBorderColor(g) {
     }
 }
 // ── Page component ────────────────────────────────────────────────────────────
+const STATUS_CHECK_TIMEOUT_MS = 30000;
 function SyncPage() {
     const [gameStates, setGameStates] = SP_REACT.useState([]);
     const [isSyncingAll, setIsSyncingAll] = SP_REACT.useState(false);
@@ -96,7 +97,10 @@ function SyncPage() {
             const assigned = games.filter(g => g.assigned);
             setGameStates(assigned.map(g => ({ id: g.id, name: g.name, status: 'idle' })));
             setLoaded(true);
-            getSyncStatuses$1()
+            Promise.race([
+                getSyncStatuses$1(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), STATUS_CHECK_TIMEOUT_MS)),
+            ])
                 .then(statuses => {
                 setGameStates(prev => prev.map(g => {
                     const entry = statuses[g.id];
@@ -107,7 +111,9 @@ function SyncPage() {
                     };
                 }));
             })
-                .catch(() => { })
+                .catch(() => {
+                setGameStates(prev => prev.map(g => ({ ...g, syncStatus: 'no_connection' })));
+            })
                 .finally(() => setStatusesLoaded(true));
         })
             .catch(() => setLoaded(true));
@@ -198,7 +204,9 @@ const getDeckySettings = callable('get_decky_settings');
 const setDeckySettings = callable('set_decky_settings');
 const autoPullIfNoConflict = callable('auto_pull_if_no_conflict');
 // ── Display map ────────────────────────────────────────────────────────────────
+const STATUS_BAR_TIMEOUT_MS = 30000;
 const OVERLAY_STATUSES = {
+    checking: { label: 'Checking saves...', color: '#8899a6' },
     in_sync: { label: 'Saves in sync', color: '#4caf76' },
     syncing: { label: 'Syncing saves…', color: '#67c1f5' },
     cloud_ahead: { label: 'Cloud has newer saves — tap to sync now', color: '#67c1f5' },
@@ -227,13 +235,25 @@ const SHORT_LABELS = {
     unknown: 'never synced',
 };
 function SyncStatusBar({ appid }) {
-    const [status, setStatus] = SP_REACT.useState(null);
+    const [status, setStatus] = SP_REACT.useState('checking');
     const [gameId, setGameId] = SP_REACT.useState(null);
     const [lastKnownStatus, setLastKnownStatus] = SP_REACT.useState(null);
     const conflictModalOpen = SP_REACT.useRef(false);
+    const checkTimerRef = SP_REACT.useRef(null);
     const fetchStatus = SP_REACT.useCallback(() => {
+        if (checkTimerRef.current !== null) {
+            clearTimeout(checkTimerRef.current);
+        }
+        checkTimerRef.current = setTimeout(() => {
+            checkTimerRef.current = null;
+            setStatus('no_connection');
+        }, STATUS_BAR_TIMEOUT_MS);
         getSyncStatusForAppId(appid)
             .then(res => {
+            if (checkTimerRef.current !== null) {
+                clearTimeout(checkTimerRef.current);
+                checkTimerRef.current = null;
+            }
             setStatus(res.status);
             setGameId(res.game_id ?? null);
             if (res.last_known_status) {
@@ -243,15 +263,27 @@ function SyncStatusBar({ appid }) {
                 setLastKnownStatus(res.status);
             }
         })
-            .catch(() => { });
+            .catch(() => {
+            if (checkTimerRef.current !== null) {
+                clearTimeout(checkTimerRef.current);
+                checkTimerRef.current = null;
+            }
+            setStatus('no_connection');
+        });
     }, [appid]);
     SP_REACT.useEffect(() => {
-        setStatus(null);
+        return () => {
+            if (checkTimerRef.current !== null)
+                clearTimeout(checkTimerRef.current);
+        };
+    }, []);
+    SP_REACT.useEffect(() => {
+        setStatus('checking');
         setGameId(null);
         fetchStatus();
     }, [appid]);
-    const entry = status ? (OVERLAY_STATUSES[status] ?? null) : null;
-    const clickable = status !== null && CLICKABLE.has(status);
+    const entry = OVERLAY_STATUSES[status] ?? null;
+    const clickable = CLICKABLE.has(status);
     const lastKnownSuffix = entry && TRANSIENT_STATUSES.has(status) && lastKnownStatus && SHORT_LABELS[lastKnownStatus]
         ? ` — ${SHORT_LABELS[lastKnownStatus]}`
         : '';

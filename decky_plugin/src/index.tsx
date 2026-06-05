@@ -38,7 +38,10 @@ const autoPullIfNoConflict   = callable<[], Record<string, unknown>>('auto_pull_
 
 // ── Display map ────────────────────────────────────────────────────────────────
 
+const STATUS_BAR_TIMEOUT_MS = 30_000;
+
 const OVERLAY_STATUSES: Record<string, { label: string; color: string }> = {
+  checking:      { label: 'Checking saves...',                                                                 color: '#8899a6' },
   in_sync:       { label: 'Saves in sync',                                                                    color: '#4caf76' },
   syncing:       { label: 'Syncing saves…',                                                                   color: '#67c1f5' },
   cloud_ahead:   { label: 'Cloud has newer saves — tap to sync now',                                          color: '#67c1f5' },
@@ -97,14 +100,26 @@ const SHORT_LABELS: Record<string, string> = {
 };
 
 function SyncStatusBar({ appid }: { appid: string }) {
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState<string>('checking');
   const [gameId, setGameId] = useState<string | null>(null);
   const [lastKnownStatus, setLastKnownStatus] = useState<string | null>(null);
   const conflictModalOpen = useRef(false);
+  const checkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchStatus = useCallback(() => {
+    if (checkTimerRef.current !== null) {
+      clearTimeout(checkTimerRef.current);
+    }
+    checkTimerRef.current = setTimeout(() => {
+      checkTimerRef.current = null;
+      setStatus('no_connection');
+    }, STATUS_BAR_TIMEOUT_MS);
     getSyncStatusForAppId(appid)
       .then(res => {
+        if (checkTimerRef.current !== null) {
+          clearTimeout(checkTimerRef.current);
+          checkTimerRef.current = null;
+        }
         setStatus(res.status);
         setGameId(res.game_id ?? null);
         if (res.last_known_status) {
@@ -113,19 +128,31 @@ function SyncStatusBar({ appid }: { appid: string }) {
           setLastKnownStatus(res.status);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (checkTimerRef.current !== null) {
+          clearTimeout(checkTimerRef.current);
+          checkTimerRef.current = null;
+        }
+        setStatus('no_connection');
+      });
   }, [appid]);
 
   useEffect(() => {
-    setStatus(null);
+    return () => {
+      if (checkTimerRef.current !== null) clearTimeout(checkTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    setStatus('checking');
     setGameId(null);
     fetchStatus();
   }, [appid]);
 
-  const entry = status ? (OVERLAY_STATUSES[status] ?? null) : null;
-  const clickable = status !== null && CLICKABLE.has(status);
+  const entry = OVERLAY_STATUSES[status] ?? null;
+  const clickable = CLICKABLE.has(status);
   const lastKnownSuffix =
-    entry && TRANSIENT_STATUSES.has(status!) && lastKnownStatus && SHORT_LABELS[lastKnownStatus]
+    entry && TRANSIENT_STATUSES.has(status) && lastKnownStatus && SHORT_LABELS[lastKnownStatus]
       ? ` — ${SHORT_LABELS[lastKnownStatus]}`
       : '';
 
