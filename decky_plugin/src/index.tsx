@@ -257,7 +257,7 @@ function Content({ settingsRef }: { settingsRef: SettingsRef }) {
     <>
       <PanelSection title="Save Sync">
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => Router.Navigate(MANAGE_ROUTE)}>
+          <ButtonItem layout="below" onClick={() => { Router.CloseSideMenus(); Router.Navigate(MANAGE_ROUTE); }}>
             Manage Saves
           </ButtonItem>
         </PanelSectionRow>

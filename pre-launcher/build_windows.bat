@@ -13,6 +13,30 @@ if not exist "%SRC%" (
     exit /b 1
 )
 
+:: ── Generate icon_data.h from icon.png (PowerShell — no Python needed) ────────
+set ICON_SRC=%SCRIPT_DIR%..\icon.png
+set ICON_H=%SCRIPT_DIR%icon_data.h
+if not exist "%ICON_SRC%" (
+    echo [error] icon.png not found at %ICON_SRC%
+    exit /b 1
+)
+if exist "%ICON_H%" (
+    echo [ok] icon_data.h already exists, skipping generation
+) else (
+    echo Generating icon_data.h...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$src='%ICON_SRC%'; $dst='%ICON_H%';" ^
+        "$d=[IO.File]::ReadAllBytes($src);" ^
+        "$rows=New-Object Collections.Generic.List[string];" ^
+        "for($i=0;$i -lt $d.Length;$i+=12){" ^
+        "  $e=[Math]::Min($i+11,$d.Length-1);" ^
+        "  $rows.Add('  '+($d[$i..$e]|ForEach-Object{'0x{0:x2}'-f $_})-join', ')}" ^
+        "$c='static const unsigned char icon_png[] = {'+[char]10+($rows-join(','+[char]10))+[char]10+'};'+[char]10+'static const unsigned int icon_png_len = '+$d.Length+';'+[char]10;" ^
+        "[IO.File]::WriteAllText($dst,$c,[Text.Encoding]::ASCII)"
+    if errorlevel 1 ( echo [error] Failed to generate icon_data.h & exit /b 1 )
+    echo Generated icon_data.h
+)
+
 :: ── Try gcc candidates (MSYS2 or PATH) — prefer 32-bit ────────────────────────
 set GCC_PATH=
 for %%G in (
@@ -35,7 +59,7 @@ if not defined GCC_PATH (
 
 if defined GCC_PATH (
     echo Building with gcc: !GCC_PATH!
-    "!GCC_PATH!" -O2 -mwindows -Wall -o "%OUT%" "%SRC%"
+    "!GCC_PATH!" -O2 -mwindows -Wall -o "%OUT%" "%SRC%" -lgdi32 -lmsimg32
     if errorlevel 1 ( echo [error] gcc build failed & exit /b 1 )
     if exist "%OUT%" (
         echo Built pre-launcher.exe -^> %OUT%
@@ -46,7 +70,7 @@ if defined GCC_PATH (
 :: ── Try vswhere / vcvarsall ───────────────────────────────────────────────────
 set VSWHERE=
 if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" (
-    set VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe
+    set "VSWHERE=!ProgramFiles(x86)!\Microsoft Visual Studio\Installer\vswhere.exe"
 )
 if not defined VSWHERE (
     if exist "%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe" (
@@ -64,7 +88,7 @@ if defined VS_PATH (
     if exist "!VCVARSALL!" (
         echo Using vcvarsall: !VCVARSALL!
         call "!VCVARSALL!" x86
-        cl /O2 /W3 /subsystem:windows "%SRC%" user32.lib gdi32.lib "/Fe:%OUT%" /link /machine:x86 /nologo
+        cl /O2 /W3 /subsystem:windows "%SRC%" user32.lib gdi32.lib msimg32.lib "/Fe:%OUT%" /link /machine:x86 /nologo
         if errorlevel 1 ( echo [error] cl.exe build failed & exit /b 1 )
         if exist "%OUT%" (
             echo Built pre-launcher.exe -^> %OUT%
@@ -78,7 +102,7 @@ where cl.exe >nul 2>&1
 if not errorlevel 1 (
     echo Using cl.exe from PATH
     pushd "%SCRIPT_DIR%"
-    cl /O2 /W3 /subsystem:windows "%SRC%" user32.lib gdi32.lib "/Fe:%OUT%" /link /machine:x86 /nologo
+    cl /O2 /W3 /subsystem:windows "%SRC%" user32.lib gdi32.lib msimg32.lib "/Fe:%OUT%" /link /machine:x86 /nologo
     set BUILD_RC=!errorlevel!
     popd
     if !BUILD_RC! neq 0 ( echo [error] cl.exe build failed & exit /b 1 )

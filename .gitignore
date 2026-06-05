@@ -28,5 +28,9 @@ games.json
 .DS_Store
 Thumbs.db
 
+# pre-launcher build artefacts — generated at build time
+pre-launcher/icon_data.h
+pre-launcher/*.obj
+
 #claude
 .claude

@@ -43,6 +43,24 @@ if [ ! -f stb_image.h ]; then
     || { echo "[error] failed to download stb_image.h"; exit 1; }
 fi
 
+# ── icon_data.h (generated from icon.png — not stored in repo) ────────────────
+if [ ! -f ../icon.png ]; then
+    echo "[error] icon.png not found at $(pwd)/../icon.png"
+    exit 1
+fi
+echo "Generating icon_data.h..."
+python3 - ../icon.png <<'PYEOF'
+import sys
+data = open(sys.argv[1], 'rb').read()
+lines = ['  ' + ', '.join(format(b, '#04x') for b in data[i:i+12])
+         for i in range(0, len(data), 12)]
+with open('icon_data.h', 'w') as out:
+    out.write('static const unsigned char icon_png[] = {\n')
+    out.write(',\n'.join(lines))
+    out.write('\n};\nstatic const unsigned int icon_png_len = ' + str(len(data)) + ';\n')
+PYEOF
+echo "✓ Generated icon_data.h"
+
 # ── compile ────────────────────────────────────────────────────────────────────
 echo "Building $OUT with $CC..."
 "$CC" -O2 -mwindows -Wall -static-libgcc -o "$OUT" pre-launcher.c -lgdi32 -lmsimg32

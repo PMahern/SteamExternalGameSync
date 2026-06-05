@@ -473,6 +473,16 @@ def cmd_pre_launch(args):
 
     def _write(status: str):
         try:
+            preserved = {}
+            try:
+                with open(status_file) as _f:
+                    for _line in _f:
+                        if '=' in _line:
+                            _k, _v = _line.strip().split('=', 1)
+                            if _k in ('FULLSCREEN',):
+                                preserved[_k] = _v
+            except Exception:
+                pass
             with open(status_file, "w") as f:
                 f.write(f"STATUS={status}\n")
                 f.write(f"GAME={game['name']}\n")
@@ -481,6 +491,8 @@ def cmd_pre_launch(args):
                     last = load_sync_state(game_id)
                     if last:
                         f.write(f"LAST_STATUS={last}\n")
+                for _k, _v in preserved.items():
+                    f.write(f"{_k}={_v}\n")
         except Exception as e:
             log_err(f"pre-launch: could not write status file: {e}")
 
