@@ -284,7 +284,8 @@ def _add_s2c_confirm_overwrite(ns_entry, shortcuts_data, vdf_path,
     def _back():
         _add_s2_details(ns_entry, shortcuts_data, vdf_path,
                         native_steam=native_steam,
-                        native_app_id=app_id if native_steam else None)
+                        native_app_id=app_id if native_steam else None,
+                        prefill_name=game_name)
 
     from gui_home import refresh_and_home
     with dpg.group(horizontal=True, parent="content_group"):
@@ -316,6 +317,10 @@ def _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
     dpg.add_spacer(height=4, parent="content_group")
     dpg.add_group(tag=results_tag, parent="content_group")
 
+    # Auto-lookup by Steam app ID — faster and more reliable than name search
+    if app_id:
+        _lud_do_appid_search(app_id, results_tag, state)
+
     def _skip():
         _add_s3_paths(ns_entry, shortcuts_data, vdf_path, game_name, app_id,
                       manifest_entry=None, suggested_exe=None, suggested_saves=[],
@@ -333,7 +338,8 @@ def _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
     def _back():
         _add_s2_details(ns_entry, shortcuts_data, vdf_path,
                         native_steam=native_steam,
-                        native_app_id=app_id if native_steam else None)
+                        native_app_id=app_id if native_steam else None,
+                        prefill_name=game_name)
 
     dpg.add_separator(parent="content_group")
     dpg.add_spacer(height=4, parent="content_group")
@@ -343,6 +349,44 @@ def _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
         dpg.add_button(label="<-- Back", width=90, height=32, callback=_back)
         from gui_home import refresh_and_home
         dpg.add_button(label="Cancel", width=80, height=32, callback=refresh_and_home)
+
+
+def _lud_do_appid_search(app_id: str, results_tag: str, state: dict):
+    dpg.add_text("Looking up by Steam App ID...", parent=results_tag,
+                 tag="_lud_appid_status", color=(130, 130, 155))
+
+    def _work():
+        manifest = ludusavi.load_manifest()
+        return ludusavi.search_by_steam_id(manifest, app_id)
+
+    def _done(result):
+        if dpg.does_item_exist("_lud_appid_status"):
+            dpg.delete_item("_lud_appid_status")
+        # run_async error tuple
+        if isinstance(result, list) and result and isinstance(result[0], tuple):
+            return
+        if result is None:
+            dpg.add_text(f"No app ID match found — search by name above.",
+                         parent=results_tag, color=(130, 130, 155))
+            return
+        name, entry = result
+        state["entry"] = (name, entry)
+        steam_id = str(entry.get("steam", {}).get("id", ""))
+        has_saves = any(
+            ludusavi._is_save(fe)
+            for fe in entry.get("files", {}).values()
+            if isinstance(fe, dict)
+        )
+        dpg.add_text(f"App ID match found:", parent=results_tag, color=(45, 164, 78))
+        add_table(
+            ["Game", "Steam ID", "Saves"],
+            [[name, steam_id, "yes" if has_saves else ""]],
+            col_weights=[4, 1, 1],
+            height=60,
+            parent_tag=results_tag,
+        )
+
+    run_async(_work, (), _done)
 
 
 def _lud_do_search(search_tag: str, results_tag: str, state: dict):

@@ -133,6 +133,18 @@ def load_manifest() -> dict:
     return _manifest_cache
 
 
+def search_by_steam_id(manifest: dict, steam_app_id: str) -> tuple[str, dict] | None:
+    """Return (name, entry) for the manifest entry matching a Steam app ID, or None."""
+    try:
+        aid = int(steam_app_id)
+    except (ValueError, TypeError):
+        return None
+    for name, entry in manifest.items():
+        if isinstance(entry, dict) and entry.get("steam", {}).get("id") == aid:
+            return name, entry
+    return None
+
+
 def search_games(manifest: dict, query: str, n: int = 12) -> list[tuple[str, dict]]:
     """Fuzzy-search manifest by game name. Returns (name, entry) pairs."""
     if not query.strip():
