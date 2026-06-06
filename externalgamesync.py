@@ -859,7 +859,7 @@ def cmd_update(args):
     import tempfile
     import urllib.request
 
-    TARBALL_URL = "https://github.com/pmahern/externalgamesync/archive/refs/heads/master.tar.gz"
+    TARBALL_URL = "https://github.com/pmahern/steamexternalgamesync/archive/refs/heads/master.tar.gz"
 
     print("Downloading latest version from GitHub...")
     try:
