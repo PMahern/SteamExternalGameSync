@@ -26,12 +26,6 @@ Get-ChildItem "$scriptDir\*.py" | ForEach-Object { Copy-Item $_.FullName $instal
 foreach ($f in @('icon.ico', 'icon.png')) {
     if (Test-Path "$scriptDir\$f") { Copy-Item "$scriptDir\$f" $installDir -Force }
 }
-if (Test-Path "$scriptDir\community") {
-    if (-not (Test-Path "$installDir\community")) {
-        New-Item -ItemType Directory -Path "$installDir\community" | Out-Null
-    }
-    Copy-Item "$scriptDir\community\*" "$installDir\community\" -Recurse -Force
-}
 # Remove installer scripts that don't belong in the install dir (leftover from old versions)
 foreach ($f in @('install.bat', 'install.ps1')) {
     if (Test-Path "$installDir\$f") { Remove-Item "$installDir\$f" -Force }
@@ -103,7 +97,6 @@ function Install-PyPackage([string]$name) {
 Install-PyPackage 'vdf'
 Install-PyPackage 'psutil'
 Install-PyPackage 'dearpygui'
-Install-PyPackage 'supabase'
 Install-PyPackage 'pyaml'
 
 # pygame — binary wheel only (building from source fails on immutable systems)
