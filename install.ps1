@@ -23,6 +23,8 @@ Write-Host "[ok] $(python --version 2>&1)"
 # ── 2. Install app files ──────────────────────────────────────────────────────
 if (-not (Test-Path $installDir)) { New-Item -ItemType Directory -Path $installDir | Out-Null }
 Get-ChildItem "$scriptDir\*.py" | ForEach-Object { Copy-Item $_.FullName $installDir -Force }
+# Clear cached bytecode so updated .py files are used immediately
+if (Test-Path "$installDir\__pycache__") { Remove-Item "$installDir\__pycache__" -Recurse -Force }
 foreach ($f in @('icon.ico', 'icon.png')) {
     if (Test-Path "$scriptDir\$f") { Copy-Item "$scriptDir\$f" $installDir -Force }
 }
@@ -97,6 +99,7 @@ function Install-PyPackage([string]$name) {
 Install-PyPackage 'vdf'
 Install-PyPackage 'psutil'
 Install-PyPackage 'dearpygui'
+Install-PyPackage 'pyaml'
 
 # pygame — binary wheel only (building from source fails on immutable systems)
 & python -c "import pygame" 2>$null

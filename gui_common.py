@@ -372,9 +372,27 @@ def add_table(columns: list[str], rows: list[list],
 
 # ── Windows / Proton path helpers (used by assign and add flows) ──────────────
 
+def _resolve_variable_path(path_str: str) -> list[Path]:
+    """Resolve a ludusavi-style variable path (e.g. <winAppData>/Game) to absolute Paths."""
+    import glob as _glob
+    from ludusavi import _fixed_var_map
+    vm = _fixed_var_map(None)
+    resolved = path_str
+    for k, v in vm.items():
+        resolved = resolved.replace(k, v)
+    resolved = resolved.replace("/", os.sep)
+    if "<storeUserId>" in resolved:
+        return [Path(m) for m in sorted(_glob.glob(resolved.replace("<storeUserId>", "*")))]
+    if "<" not in resolved:
+        return [Path(resolved)]
+    return []
+
+
 def win_exe_candidates(path_str: str) -> list[Path]:
     if not path_str:
         return []
+    if "<" in path_str:
+        return _resolve_variable_path(path_str)
     norm = path_str.replace("/", "\\").lstrip("\\")
     if re.match(r'^[A-Za-z]:\\', norm):
         return [Path(norm)]
@@ -391,6 +409,8 @@ def win_exe_candidates(path_str: str) -> list[Path]:
 def win_save_candidates(path_str: str) -> list[Path]:
     if not path_str:
         return []
+    if "<" in path_str:
+        return _resolve_variable_path(path_str)
     norm = path_str.replace("/", "\\").lstrip("\\")
     if re.match(r'^[A-Za-z]:\\', norm):
         return [Path(norm)]

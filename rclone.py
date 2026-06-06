@@ -121,23 +121,26 @@ def rclone_test() -> tuple[bool, str]:
 
 def rclone_ensure_remote_folder() -> bool:
     """Create the ExternalGameSync folder on the remote if it doesn't exist."""
-    r = _run([rclone_cmd(), "mkdir", RCLONE_REMOTE], capture_output=True, text=True)
+    try:
+        r = _run([rclone_cmd(), "mkdir", RCLONE_REMOTE],
+                 capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return False
     return r.returncode == 0
 
 
 # ── games.json push / pull ────────────────────────────────────────────────────
 
 def rclone_pull_games_json() -> tuple[bool, str]:
-    """Copy games.json from remote to local SYNC_ROOT."""
+    """Pull games.json from remote and merge with local using timestamps (newer wins)."""
     remote_file = f"{RCLONE_REMOTE}/games.json"
-    r = _run(
-        [rclone_cmd(), "copyto", remote_file, str(GAMES_JSON)],
-        capture_output=True, text=True
-    )
-    if r.returncode != 0:
-        if any(p in r.stderr.lower() for p in ("not found", "no such", "404", "doesn't exist", "does not exist")):
-            return True, "no existing config (fresh start)"
-        return False, r.stderr.strip()
+    local_games = load_games()
+    remote_games = _fetch_remote_games()
+    if not remote_games:
+        # Nothing on server yet — nothing to pull
+        return True, "no existing config (fresh start)"
+    merged = merge_games(local_games, remote_games)
+    save_games(merged)
     return True, "pulled existing config"
 
 
@@ -147,19 +150,29 @@ def _strip_machine_fields(g: dict) -> dict:
     return {k: v for k, v in g.items() if k not in _MACHINE_FIELDS}
 
 def merge_games(local: list[dict], remote: list[dict]) -> list[dict]:
-    """Union two games lists by id. Machine-specific fields are kept out of the shared config."""
+    """Merge two game lists by id using 'added' timestamp — newer entry wins.
+    Games present on only one side are kept as-is. Ties go to local."""
+    from datetime import datetime
+
+    def _ts(g: dict):
+        try:
+            return datetime.fromisoformat(g.get("added", ""))
+        except (ValueError, TypeError):
+            return datetime.min
+
     remote_by_id = {g["id"]: g for g in remote}
     local_by_id  = {g["id"]: g for g in local}
     result = []
-    for gid, rg in remote_by_id.items():
-        if gid in local_by_id:
-            merged = {**_strip_machine_fields(rg), **_strip_machine_fields(local_by_id[gid])}
-            result.append(merged)
-        else:
+    for gid in set(remote_by_id) | set(local_by_id):
+        lg = local_by_id.get(gid)
+        rg = remote_by_id.get(gid)
+        if lg is None:
             result.append(_strip_machine_fields(rg))
-    for gid, lg in local_by_id.items():
-        if gid not in remote_by_id:
+        elif rg is None:
             result.append(_strip_machine_fields(lg))
+        else:
+            winner = lg if _ts(lg) >= _ts(rg) else rg
+            result.append(_strip_machine_fields(winner))
     return result
 
 
@@ -169,7 +182,7 @@ def _fetch_remote_games() -> list[dict]:
     tmp = Path(tempfile.mktemp(suffix=".json"))
     try:
         r = _run([rclone_cmd(), "copyto", remote_file, str(tmp)],
-                 capture_output=True, text=True)
+                 capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             return []
         return json.loads(tmp.read_text()).get("games", [])
@@ -200,10 +213,13 @@ def rclone_push_games_json() -> tuple[bool, str]:
     if remote_games:
         merged = merge_games(load_games(), remote_games)
         save_games(merged)
-    r = _run(
-        [rclone_cmd(), "copyto", str(GAMES_JSON), remote_file],
-        capture_output=True, text=True
-    )
+    try:
+        r = _run(
+            [rclone_cmd(), "copyto", str(GAMES_JSON), remote_file],
+            capture_output=True, text=True, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Connection timed out (30 s) — check VPN / server"
     if r.returncode != 0:
         return False, r.stderr.strip()
     return True, ""

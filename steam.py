@@ -61,10 +61,24 @@ def _to_drive_c_rel(path_str: str) -> str:
     return rel.replace('\\', '/')
 
 
+_VAR_TO_PROTON = {
+    "<winAppData>":      "users/steamuser/AppData/Roaming",
+    "<winLocalAppData>": "users/steamuser/AppData/Local",
+    "<winDocuments>":    "users/steamuser/Documents",
+    "<winDesktop>":      "users/steamuser/Desktop",
+    "<winProgramData>":  "ProgramData",
+}
+
+
 def _normalize_proton_save_path(path_str: str) -> str:
     """Normalize a save path for use inside a Proton prefix.
-    Maps any Users/<windows-username>/ to users/steamuser/ so configs
-    created on Windows resolve correctly on Linux."""
+    Handles variable form (<winDocuments>/...) and Windows absolute paths."""
+    if "<" in path_str:
+        for var, rel in _VAR_TO_PROTON.items():
+            if path_str.startswith(var + "/"):
+                return rel + "/" + path_str[len(var) + 1:]
+            if path_str == var:
+                return rel
     rel = _to_drive_c_rel(path_str)
     return re.sub(r'^[Uu]sers/[^/]+/', 'users/steamuser/', rel)
 

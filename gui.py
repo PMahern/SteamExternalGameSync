@@ -25,7 +25,6 @@ from gui_sync import flow_sync_art, flow_sync_all, flow_relink
 from gui_install import flow_install
 from gui_decky import flow_decky
 
-
 def _build_sidebar():
     dpg.add_text("External\nGameSync", parent="sidebar")
     dpg.add_separator(parent="sidebar")

@@ -33,7 +33,7 @@ _FIXED_VARS = frozenset({
     "<winPublicDocuments>", "<winDesktop>", "<winProgramData>",
     "<home>", "<xdgData>", "<xdgConfig>", "<xdgCache>",
 })
-_INSTALL_VARS = frozenset({"<base>", "<game>", "<root>"})
+_INSTALL_VARS = frozenset({"<base>", "<game>"})
 
 _manifest_cache: dict | None = None
 
@@ -133,6 +133,18 @@ def load_manifest() -> dict:
     return _manifest_cache
 
 
+def search_by_steam_id(manifest: dict, steam_app_id: str) -> tuple[str, dict] | None:
+    """Return (name, entry) for the manifest entry matching a Steam app ID, or None."""
+    try:
+        aid = int(steam_app_id)
+    except (ValueError, TypeError):
+        return None
+    for name, entry in manifest.items():
+        if isinstance(entry, dict) and entry.get("steam", {}).get("id") == aid:
+            return name, entry
+    return None
+
+
 def search_games(manifest: dict, query: str, n: int = 12) -> list[tuple[str, dict]]:
     """Fuzzy-search manifest by game name. Returns (name, entry) pairs."""
     if not query.strip():
@@ -170,13 +182,23 @@ def _resolve(path_str: str, var_map: dict) -> str | None:
     return None if "<" in s else s
 
 
+def _steam_root() -> str | None:
+    try:
+        from steam import _find_all_steamapps_dirs
+        dirs = _find_all_steamapps_dirs()
+        return str(dirs[0].parent) if dirs else None
+    except Exception:
+        return None
+
+
 def _fixed_var_map(app_id: str | None) -> dict:
+    steam_root = _steam_root()
     if sys.platform == "win32":
         ad  = os.environ.get("APPDATA", "")
         lad = os.environ.get("LOCALAPPDATA", "")
         pd  = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
         h   = str(Path.home())
-        return {
+        vm  = {
             "<winAppData>":         ad,
             "<winLocalAppData>":    lad,
             "<winProgramData>":     pd,
@@ -185,6 +207,9 @@ def _fixed_var_map(app_id: str | None) -> dict:
             "<winDesktop>":         str(Path.home() / "Desktop"),
             "<home>":               h,
         }
+        if steam_root:
+            vm["<root>"] = steam_root
+        return vm
     else:
         if not app_id:
             return {}
@@ -192,7 +217,7 @@ def _fixed_var_map(app_id: str | None) -> dict:
         dc = proton_drive_c(app_id)
         su = dc / "users" / "steamuser"
         h  = Path.home()
-        return {
+        vm  = {
             "<winAppData>":         str(su / "AppData" / "Roaming"),
             "<winLocalAppData>":    str(su / "AppData" / "Local"),
             "<winProgramData>":     str(dc / "ProgramData"),
@@ -204,10 +229,87 @@ def _fixed_var_map(app_id: str | None) -> dict:
             "<xdgConfig>":          str(h / ".config"),
             "<xdgCache>":           str(h / ".cache"),
         }
+        if steam_root:
+            vm["<root>"] = steam_root
+        return vm
+
+
+def normalize_path_for_storage(path: str | Path) -> str:
+    """
+    Convert an absolute Windows path to portable variable form for storage in games.json.
+    E.g. C:\\Users\\Paisley\\AppData\\Roaming\\Game  →  <winAppData>/Game
+    No-op on non-Windows or if no known prefix matches.
+    """
+    if sys.platform != "win32":
+        return str(path)
+    p = str(path).replace("\\", "/")
+
+    ad   = os.environ.get("APPDATA",      "").replace("\\", "/")
+    lad  = os.environ.get("LOCALAPPDATA", "").replace("\\", "/")
+    pd   = os.environ.get("PROGRAMDATA",  r"C:\ProgramData").replace("\\", "/")
+    h    = str(Path.home()).replace("\\", "/")
+    docs = str(Path.home() / "Documents").replace("\\", "/")
+    desk = str(Path.home() / "Desktop").replace("\\", "/")
+
+    subs = [
+        (ad,   "<winAppData>"),
+        (lad,  "<winLocalAppData>"),
+        (docs, "<winDocuments>"),
+        (desk, "<winDesktop>"),
+        (pd,   "<winProgramData>"),
+        (h,    "<home>"),
+    ]
+    subs = [(r.rstrip("/"), v) for r, v in subs if r]
+    subs.sort(key=lambda x: len(x[0]), reverse=True)
+
+    pl = p.lower()
+    for real, var in subs:
+        rl = real.lower()
+        if pl.startswith(rl + "/"):
+            return var + "/" + p[len(real) + 1:]
+        if pl == rl:
+            return var
+
+    steam_root = _steam_root()
+    if steam_root:
+        sr = steam_root.replace("\\", "/").rstrip("/")
+        ud_prefix = sr + "/userdata/"
+        if pl.startswith(ud_prefix.lower()):
+            rest = p[len(ud_prefix):]
+            slash = rest.find("/")
+            if slash > 0 and rest[:slash].isdigit():
+                return "<root>/userdata/<storeUserId>/" + rest[slash + 1:]
+        if pl.startswith(sr.lower() + "/"):
+            return "<root>/" + p[len(sr) + 1:]
+        if pl == sr.lower():
+            return "<root>"
+
+    # Fallback: strip drive letter so any absolute path becomes drive_c-relative
+    import re as _re
+    m = _re.match(r'^[A-Za-z]:/(.*)', p)
+    if m:
+        p = m.group(1)
+
+    # Normalize Proton steamuser paths (drive_c-relative, applies on both platforms)
+    _PROTON_USER_VARS = [
+        ("users/steamuser/AppData/Roaming", "<winAppData>"),
+        ("users/steamuser/AppData/Local",   "<winLocalAppData>"),
+        ("users/steamuser/Documents",       "<winDocuments>"),
+        ("users/steamuser/Desktop",         "<winDesktop>"),
+    ]
+    pl = p.lower()
+    for prefix, var in _PROTON_USER_VARS:
+        if pl.startswith(prefix.lower() + "/"):
+            return var + "/" + p[len(prefix) + 1:]
+        if pl == prefix.lower():
+            return var
+
+    return p
 
 
 def get_fixed_save_paths(entry: dict, app_id: str | None) -> list[str]:
     """Resolve save paths that don't need the install directory."""
+    import glob as _glob
     vm = _fixed_var_map(app_id)
     if not vm:
         return []
@@ -219,9 +321,21 @@ def get_fixed_save_paths(entry: dict, app_id: str | None) -> list[str]:
             continue
         if _needs_install_var(path_str):
             continue
-        r = _resolve(path_str, vm)
-        if r:
-            results.append(r)
+
+        # Apply all known variable substitutions then fix separators
+        partial = path_str
+        for k, v in vm.items():
+            partial = partial.replace(k, v)
+        partial = partial.replace("/", os.sep)
+
+        if "<storeUserId>" in partial:
+            # Expand across all Steam userdata accounts present on this machine.
+            # Steam's userdata only ever contains numeric user-ID directories so
+            # every glob match is a valid candidate.
+            pattern = partial.replace("<storeUserId>", "*")
+            results.extend(sorted(_glob.glob(pattern)))
+        elif "<" not in partial:
+            results.append(partial)
     return results
 
 
