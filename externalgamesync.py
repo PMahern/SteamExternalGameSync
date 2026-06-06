@@ -241,6 +241,7 @@ COMMANDS = {
     "list":               "List tracked games and status",
     "log":                "Show recent log  [N lines, default 50]",
     "install-decky":      "Install the Decky Loader plugin to ~/homebrew/plugins/",
+    "update":             "Update ExternalGameSync to the latest version from GitHub",
 }
 
 
@@ -836,8 +837,92 @@ def cmd_install_decky(args):
                 sys.exit(1)
 
     print(f"Installed: {dest}")
-    print("Restart Decky to activate:")
-    print("  Quick Access Menu > Settings > Decky > Restart plugin service")
+
+    # Restart the Decky plugin-loader service so the new version is active immediately
+    r = subprocess.run(["systemctl", "restart", "plugin_loader"], capture_output=True)
+    if r.returncode == 0:
+        print("plugin_loader service restarted.")
+    else:
+        # May need sudo on some setups
+        r2 = subprocess.run(["sudo", "systemctl", "restart", "plugin_loader"], capture_output=True)
+        if r2.returncode == 0:
+            print("plugin_loader service restarted (via sudo).")
+        else:
+            print("Could not restart plugin_loader automatically.")
+            print("  Restart manually: Quick Access Menu > Settings > Decky > Restart plugin service")
+
+
+def cmd_update(args):
+    """Update ExternalGameSync to the latest version from GitHub."""
+    import shutil
+    import tarfile
+    import tempfile
+    import urllib.request
+
+    TARBALL_URL = "https://github.com/pmahern/externalgamesync/archive/refs/heads/master.tar.gz"
+
+    print("Downloading latest version from GitHub...")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tarball = os.path.join(tmp, "master.tar.gz")
+            urllib.request.urlretrieve(TARBALL_URL, tarball)
+
+            print("Extracting...")
+            with tarfile.open(tarball, "r:gz") as tf:
+                tf.extractall(tmp)
+
+            # The tarball extracts to externalgamesync-master/
+            extracted = os.path.join(tmp, "externalgamesync-master")
+            if not os.path.isdir(extracted):
+                # Fallback: find any extracted dir
+                subdirs = [d for d in os.listdir(tmp) if os.path.isdir(os.path.join(tmp, d)) and d != "__MACOSX"]
+                if not subdirs:
+                    print("Could not find extracted directory.")
+                    sys.exit(1)
+                extracted = os.path.join(tmp, subdirs[0])
+
+            if sys.platform == "win32":
+                installer = os.path.join(extracted, "install.ps1")
+                if not os.path.exists(installer):
+                    print(f"Installer not found: {installer}")
+                    sys.exit(1)
+                print("Running installer...")
+                subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", installer], check=True)
+            else:
+                installer = os.path.join(extracted, "install.sh")
+                if not os.path.exists(installer):
+                    print(f"Installer not found: {installer}")
+                    sys.exit(1)
+                os.chmod(installer, 0o755)
+                print("Running installer...")
+                subprocess.run(["bash", installer], check=True)
+
+    except Exception as e:
+        print(f"Update failed: {e}")
+        sys.exit(1)
+
+    print()
+
+    # Prompt to update shortcuts
+    try:
+        answer = input("Update Steam shortcuts for all configured games? [Y/n] ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer in ("", "y", "yes"):
+        print()
+        cmd_update_shortcuts([])
+
+    # Prompt to update Decky plugin (only if already installed)
+    decky_dest = Path.home() / "homebrew" / "plugins" / "ExternalGameSync"
+    if decky_dest.exists():
+        print()
+        try:
+            answer = input("Update the Decky plugin? [Y/n] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer in ("", "y", "yes"):
+            print()
+            cmd_install_decky([])
 
 
 def main():
@@ -864,6 +949,7 @@ def main():
         "list":               cmd_list,
         "log":           cmd_log,
         "install-decky": cmd_install_decky,
+        "update":        cmd_update,
     }
     dispatch[sys.argv[1]](sys.argv[2:])
 
