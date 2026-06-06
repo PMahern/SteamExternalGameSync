@@ -24,6 +24,7 @@ from gui_add import flow_add
 from gui_sync import flow_sync_art, flow_sync_all, flow_relink
 from gui_install import flow_install
 from gui_decky import flow_decky
+from gui_community import flow_community
 
 
 def _build_sidebar():
@@ -38,6 +39,7 @@ def _build_sidebar():
         ("Sync Artwork",   "art",      flow_sync_art),
         ("Sync",           "sync_all", flow_sync_all),
         ("Relink Saves",   "relink",   flow_relink),
+        ("Community",      "community", flow_community),
     ]
     if sys.platform != "win32":
         nav_items.insert(1, ("Install Game", "install", flow_install))

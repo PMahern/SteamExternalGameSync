@@ -31,6 +31,10 @@ if [[ -d "$SCRIPT_DIR/decky_plugin" ]]; then
     rm -rf "$APP_DIR/decky_plugin"
     cp -r "$SCRIPT_DIR/decky_plugin" "$APP_DIR/decky_plugin"
 fi
+if [[ -d "$SCRIPT_DIR/community" ]]; then
+    rm -rf "$APP_DIR/community"
+    cp -r "$SCRIPT_DIR/community" "$APP_DIR/community"
+fi
 echo "✓ Installed app files to $APP_DIR"
 
 # ── 3. Create launcher script ─────────────────────────────────────────────────
@@ -75,6 +79,7 @@ _missing_pkgs=()
 python3 -c "import vdf" 2>/dev/null       || _missing_pkgs+=(vdf)
 python3 -c "import dearpygui" 2>/dev/null || _missing_pkgs+=(dearpygui)
 python3 -c "import yaml" 2>/dev/null      || _missing_pkgs+=(PyYAML)
+python3 -c "import supabase" 2>/dev/null  || _missing_pkgs+=(supabase)
 
 if [[ ${#_missing_pkgs[@]} -eq 0 ]]; then
     echo "✓ Python packages: vdf, dearpygui, PyYAML"

@@ -34,17 +34,68 @@ def flow_assign():
     if not require_configured():
         return
     set_nav_active("assign")
-    _assign_s1_game()
+    _assign_s0_mode()
 
+
+# ── Module-level state for community lookup screens ───────────────────────────
+_comm_lookup_state: dict = {}
+
+
+# ── Entry screen ──────────────────────────────────────────────────────────────
+
+def _assign_s0_mode():
+    clear_content()
+    add_header("Assign Config", "How do you want to find a config for this game?")
+
+    dpg.add_spacer(height=12, parent="content_group")
+    dpg.add_text("Community Database", parent="content_group")
+    dpg.add_text(
+        "Find a config by looking up the game's exe hash or Steam App ID — no sign-in required.\n"
+        "Best for games you just installed and haven't configured yet.",
+        parent="content_group", color=(130, 130, 155), wrap=700,
+    )
+    dpg.add_button(label="Search Community Database  -->", width=280, height=32,
+                   callback=_assign_comm_s1_type, parent="content_group")
+
+    dpg.add_spacer(height=16, parent="content_group")
+    dpg.add_separator(parent="content_group")
+    dpg.add_spacer(height=16, parent="content_group")
+
+    dpg.add_text("Your Cloud Configs", parent="content_group")
+    dpg.add_text(
+        "Pick from configs already on your cloud storage and assign to a local shortcut.",
+        parent="content_group", color=(130, 130, 155), wrap=700,
+    )
+    dpg.add_button(label="Assign From Cloud Configs  -->", width=280, height=32,
+                   callback=_assign_s1_game, parent="content_group")
+
+    dpg.add_spacer(height=8, parent="content_group")
+    dpg.add_separator(parent="content_group")
+    dpg.add_spacer(height=4, parent="content_group")
+    dpg.add_button(label="Cancel", width=80, height=32,
+                   callback=refresh_and_home, parent="content_group")
+
+
+# ── Your Cloud Configs path (existing workflow) ───────────────────────────────
 
 def _assign_s1_game():
     games = load_games()
-    if not games:
-        show_error("No Configs",
-                   "No game configs found on cloud storage. Use 'Add New Game Config' to create one first.")
-        return
     clear_content()
-    add_header("Assign Config", "Step 1 -- Pick a game config from cloud storage")
+    add_header("Assign Config", "Pick a game config from your cloud storage")
+
+    if not games:
+        dpg.add_text("No game configs found on cloud storage.",
+                     parent="content_group", color=(130, 130, 155))
+        dpg.add_text("Use 'Add New Game Config' or 'Search Community Database' to add one.",
+                     parent="content_group", color=(130, 130, 155))
+        dpg.add_separator(parent="content_group")
+        dpg.add_spacer(height=4, parent="content_group")
+        with dpg.group(horizontal=True, parent="content_group"):
+            dpg.add_button(label="<-- Back", callback=_assign_s0_mode,
+                           width=90, height=32)
+            dpg.add_button(label="Cancel", callback=refresh_and_home,
+                           width=80, height=32)
+        return
 
     configured_count = sum(1 for g in games if get_local_config(g["id"]))
     dpg.add_button(
@@ -67,7 +118,378 @@ def _assign_s1_game():
         if gc:
             _assign_s2_type(gc)
 
-    add_action_bar("Next -->", _next)
+    add_action_bar("Next  -->", _next, back_cb=_assign_s0_mode)
+
+
+# ── Community lookup path ─────────────────────────────────────────────────────
+
+def _assign_comm_s1_type():
+    clear_content()
+    add_header("Community Lookup", "Step 1 — What kind of game is this?")
+
+    dpg.add_spacer(height=12, parent="content_group")
+    dpg.add_text("Non-Steam Shortcut", parent="content_group")
+    dpg.add_text(
+        "A Windows game running under Proton via a non-Steam shortcut.\n"
+        "Identified by a hash of the game exe or installer.",
+        parent="content_group", color=(130, 130, 155), wrap=700,
+    )
+    dpg.add_button(label="Non-Steam Shortcut  -->", width=240, height=32,
+                   callback=_assign_comm_s2_nonsteam, parent="content_group")
+
+    dpg.add_spacer(height=16, parent="content_group")
+    dpg.add_separator(parent="content_group")
+    dpg.add_spacer(height=16, parent="content_group")
+
+    dpg.add_text("Native Steam Game", parent="content_group")
+    dpg.add_text(
+        "A Steam-purchased game in its own Proton prefix.\n"
+        "Identified by its stable Steam App ID.",
+        parent="content_group", color=(130, 130, 155), wrap=700,
+    )
+    dpg.add_button(label="Native Steam Game  -->", width=240, height=32,
+                   callback=_assign_comm_s2_native, parent="content_group")
+
+    dpg.add_separator(parent="content_group")
+    dpg.add_spacer(height=4, parent="content_group")
+    with dpg.group(horizontal=True, parent="content_group"):
+        dpg.add_button(label="<-- Back", callback=_assign_s0_mode,
+                       width=90, height=32)
+        dpg.add_button(label="Cancel",   callback=refresh_and_home,
+                       width=80, height=32)
+
+
+def _assign_comm_s2_nonsteam():
+    shortcuts_data, vdf_path = read_shortcuts()
+    if not shortcuts_data:
+        show_error("Shortcuts Unavailable",
+                   "Could not read Steam shortcuts.vdf.")
+        return
+    ns_games = get_non_steam_games(shortcuts_data)
+    if not ns_games:
+        show_error("No Shortcuts",
+                   "No non-Steam games found. Add one via Games --> Add a Non-Steam Game.")
+        return
+
+    global _comm_lookup_state
+    _comm_lookup_state = {
+        "native": False, "ns_entry": None, "app_id": None,
+        "shortcuts_data": shortcuts_data, "vdf_path": vdf_path,
+        "results": [], "results_tbl": {},
+    }
+
+    clear_content()
+    add_header("Community Lookup",
+               "Step 2 — Select a shortcut to look it up, or search by name below")
+
+    rows = [[g["name"], g["exe"]] for g in ns_games]
+    tbl  = add_table(["Shortcut", "Exe"], rows, col_weights=[2, 3],
+                     filterable=True, height=180)
+
+    def _make_sel_cb(ns_g):
+        def _cb(sender, app_data, user_data):
+            for t in tbl["sel_tags"]:
+                if t != sender:
+                    dpg.set_value(t, False)
+            tbl["selected"] = user_data
+            if app_data:
+                _comm_lookup_state["ns_entry"] = ns_g
+                _assign_comm_hash_lookup(ns_g)
+        return _cb
+
+    for i, tag in enumerate(tbl["sel_tags"]):
+        dpg.configure_item(tag, callback=_make_sel_cb(ns_games[i]))
+
+    _comm_results_section()
+    with dpg.group(horizontal=True, parent="content_group"):
+        dpg.add_button(label="<-- Back", callback=_assign_comm_s1_type,
+                       width=90, height=32)
+        dpg.add_button(label="Cancel",   callback=refresh_and_home,
+                       width=80, height=32)
+
+
+def _assign_comm_s2_native():
+    global _comm_lookup_state
+    _comm_lookup_state = {
+        "native": True, "ns_entry": None, "app_id": None,
+        "shortcuts_data": None, "vdf_path": None,
+        "results": [], "results_tbl": {},
+    }
+
+    clear_content()
+    add_header("Community Lookup",
+               "Step 2 — Select an installed game to look it up, or search by name below")
+
+    # Placeholder group for the games table — filled async so it renders above results
+    dpg.add_group(tag="_comm_native_tbl_area", parent="content_group")
+    dpg.add_text("Loading installed games...", tag="_comm_native_loading",
+                 parent="_comm_native_tbl_area", color=(130, 130, 155))
+
+    _comm_results_section()
+    with dpg.group(horizontal=True, parent="content_group"):
+        dpg.add_button(label="<-- Back", callback=_assign_comm_s1_type,
+                       width=90, height=32)
+        dpg.add_button(label="Cancel",   callback=refresh_and_home,
+                       width=80, height=32)
+
+    def _load():
+        return list_steam_games()
+
+    def _loaded(games):
+        if dpg.does_item_exist("_comm_native_loading"):
+            dpg.delete_item("_comm_native_loading")
+        if not games:
+            dpg.add_text("No installed Steam games found.",
+                         parent="_comm_native_tbl_area", color=(207, 34, 46))
+            return
+        rows = [[g["app_id"], g["name"]] for g in games]
+        tbl  = add_table(["App ID", "Name"], rows, col_weights=[1, 4],
+                         filterable=True, height=180,
+                         parent_tag="_comm_native_tbl_area")
+
+        def _make_sel_cb(app_id_val):
+            def _cb(sender, app_data, user_data):
+                for t in tbl["sel_tags"]:
+                    if t != sender:
+                        dpg.set_value(t, False)
+                tbl["selected"] = user_data
+                if app_data:
+                    _comm_lookup_state["app_id"] = app_id_val
+                    _assign_comm_appid_lookup(app_id_val)
+            return _cb
+
+        for i, tag in enumerate(tbl["sel_tags"]):
+            dpg.configure_item(tag, callback=_make_sel_cb(games[i]["app_id"]))
+
+    run_async(_load, (), _loaded)
+
+
+def _comm_results_section():
+    """Add the lookup-status line, results group, and name-search controls to content_group."""
+    dpg.add_spacer(height=8, parent="content_group")
+    dpg.add_text("", tag="_comm_lookup_status", parent="content_group",
+                 color=(130, 130, 155))
+    dpg.add_group(tag="_comm_results_group", parent="content_group")
+    dpg.add_spacer(height=4, parent="content_group")
+    dpg.add_button(label="Import & Assign  -->", width=200, height=28,
+                   tag="_comm_import_btn", callback=_assign_comm_proceed,
+                   parent="content_group")
+    dpg.add_separator(parent="content_group")
+    dpg.add_spacer(height=4, parent="content_group")
+    dpg.add_text("Or search by name:", parent="content_group", color=(130, 130, 155))
+    with dpg.group(horizontal=True, parent="content_group"):
+        dpg.add_input_text(tag="_comm_search_query", width=320, hint="Game name...",
+                           on_enter=True, callback=_assign_comm_name_search)
+        dpg.add_button(label="Search", width=80, height=22,
+                       callback=_assign_comm_name_search)
+    dpg.add_spacer(height=6, parent="content_group")
+
+
+def _assign_comm_populate_results(results: list[dict]):
+    try:
+        if dpg.does_item_exist("_comm_results_group"):
+            dpg.delete_item("_comm_results_group", children_only=True)
+        rows = [[str(r.get("id", "")), r.get("name", ""), str(r.get("votes", 0)),
+                 r.get("exe_path", ""), r.get("save_path", "")]
+                for r in results if isinstance(r, dict) and r.get("id") is not None]
+        if not rows:
+            if dpg.does_item_exist("_comm_lookup_status"):
+                dpg.set_value("_comm_lookup_status", "No results found.")
+            return
+        tbl = add_table(["#", "Name", "Votes", "Exe", "Save"], rows,
+                        col_weights=[1, 2, 1, 3, 3], height=180,
+                        parent_tag="_comm_results_group")
+        _comm_lookup_state["results_tbl"] = tbl
+    except Exception as e:
+        if dpg.does_item_exist("_comm_lookup_status"):
+            dpg.set_value("_comm_lookup_status", f"Error displaying results: {e}")
+            dpg.configure_item("_comm_lookup_status", color=(207, 34, 46))
+
+
+def _comm_check_run_async_error(results) -> bool:
+    """Return True and show the error if run_async encoded a worker exception."""
+    if results and isinstance(results[0], tuple):
+        msg = results[0][0] if results[0] else "Unknown error"
+        if dpg.does_item_exist("_comm_lookup_status"):
+            dpg.set_value("_comm_lookup_status", f"Error: {msg}")
+            dpg.configure_item("_comm_lookup_status", color=(207, 34, 46))
+        _comm_lookup_state["results"] = []
+        return True
+    return False
+
+
+def _assign_comm_hash_lookup(ns_g: dict):
+    if dpg.does_item_exist("_comm_lookup_status"):
+        dpg.set_value("_comm_lookup_status", "Looking up in community database...")
+    if dpg.does_item_exist("_comm_results_group"):
+        dpg.delete_item("_comm_results_group", children_only=True)
+
+    exe_str = ns_g.get("exe", "").strip().strip('"')
+    raw_aid = ns_g.get("appid")
+    try:
+        app_id = str(int(raw_aid) & 0xFFFFFFFF) if raw_aid else None
+    except (ValueError, TypeError):
+        app_id = str(raw_aid) if raw_aid else None
+
+    def _work():
+        from community.client import lookup_by_hash
+        from games import hash_file, load_install_hashes
+        hashes: list[str] = []
+        if exe_str:
+            try:
+                hashes.append(hash_file(Path(exe_str)))
+            except Exception:
+                pass
+        if app_id:
+            hashes.extend(load_install_hashes(app_id))
+        results: list[dict] = []
+        seen: set[int] = set()
+        for h in hashes:
+            for cfg in lookup_by_hash(h):
+                if cfg["id"] not in seen:
+                    seen.add(cfg["id"])
+                    results.append(cfg)
+        return results
+
+    def _done(results):
+        if _comm_check_run_async_error(results):
+            return
+        _comm_lookup_state["results"] = results
+        if not results:
+            if dpg.does_item_exist("_comm_lookup_status"):
+                dpg.set_value("_comm_lookup_status",
+                              "No matches found by hash — try a name search below.")
+            return
+        if dpg.does_item_exist("_comm_lookup_status"):
+            dpg.set_value("_comm_lookup_status",
+                          f"{len(results)} config(s) found — select one then click Import & Assign")
+        _assign_comm_populate_results(results)
+
+    run_async(_work, (), _done)
+
+
+def _assign_comm_appid_lookup(app_id: str):
+    if dpg.does_item_exist("_comm_lookup_status"):
+        dpg.set_value("_comm_lookup_status", "Looking up in community database...")
+    if dpg.does_item_exist("_comm_results_group"):
+        dpg.delete_item("_comm_results_group", children_only=True)
+
+    def _work():
+        from community.client import lookup_by_steam_app_id
+        return lookup_by_steam_app_id(app_id)
+
+    def _done(results):
+        if _comm_check_run_async_error(results):
+            return
+        _comm_lookup_state["results"] = results
+        if not results:
+            if dpg.does_item_exist("_comm_lookup_status"):
+                dpg.set_value("_comm_lookup_status",
+                              "No matches found by App ID — try a name search below.")
+            return
+        if dpg.does_item_exist("_comm_lookup_status"):
+            dpg.set_value("_comm_lookup_status",
+                          f"{len(results)} config(s) found — select one then click Import & Assign")
+        _assign_comm_populate_results(results)
+
+    run_async(_work, (), _done)
+
+
+def _assign_comm_name_search():
+    query = dpg.get_value("_comm_search_query").strip() \
+        if dpg.does_item_exist("_comm_search_query") else ""
+    if not query:
+        return
+    if dpg.does_item_exist("_comm_lookup_status"):
+        dpg.set_value("_comm_lookup_status", "Searching...")
+    if dpg.does_item_exist("_comm_results_group"):
+        dpg.delete_item("_comm_results_group", children_only=True)
+
+    def _work():
+        from community.client import search_by_name
+        return search_by_name(query)
+
+    def _done(results):
+        if _comm_check_run_async_error(results):
+            return
+        _comm_lookup_state["results"] = results
+        if not results:
+            if dpg.does_item_exist("_comm_lookup_status"):
+                dpg.set_value("_comm_lookup_status", "No results found.")
+            return
+        if dpg.does_item_exist("_comm_lookup_status"):
+            dpg.set_value("_comm_lookup_status",
+                          f"{len(results)} result(s) — select one then click Import & Assign")
+        _assign_comm_populate_results(results)
+
+    run_async(_work, (), _done)
+
+
+def _assign_comm_proceed():
+    tbl = _comm_lookup_state.get("results_tbl", {})
+    sel = tbl.get("selected")
+    if not sel:
+        return
+    try:
+        community_id = int(sel[0])
+    except (ValueError, IndexError):
+        return
+    community_cfg = next(
+        (r for r in _comm_lookup_state.get("results", []) if r["id"] == community_id),
+        None,
+    )
+    if not community_cfg:
+        return
+    _comm_import_config(
+        community_cfg,
+        ns_entry       = _comm_lookup_state.get("ns_entry"),
+        shortcuts_data = _comm_lookup_state.get("shortcuts_data"),
+        vdf_path       = _comm_lookup_state.get("vdf_path"),
+        native_steam   = _comm_lookup_state.get("native", False),
+        native_app_id  = _comm_lookup_state.get("app_id"),
+    )
+
+
+def _comm_import_config(community_cfg: dict, *, ns_entry=None, shortcuts_data=None,
+                        vdf_path=None, native_steam: bool = False,
+                        native_app_id: str | None = None):
+    """Import a community config into games.json + cloud, then go straight to path confirmation."""
+    import datetime
+    from games import game_id_from_name
+    community_id = community_cfg["id"]
+    show_progress(f"Importing '{community_cfg['name']}'...")
+
+    def _work():
+        rclone_mod.rclone_pull_games_json()
+        all_g = load_games()
+        existing = next((g for g in all_g if g.get("community_id") == community_id), None)
+        if existing:
+            return existing
+        local_id = game_id_from_name(community_cfg["name"])
+        new_cfg: dict = {
+            "id":           local_id,
+            "community_id": community_id,
+            "name":         community_cfg["name"],
+            "exe_path":     community_cfg.get("exe_path", ""),
+            "save_path":    community_cfg.get("save_path", ""),
+            "save_filter":  community_cfg.get("save_filter", ""),
+            "env_vars":     community_cfg.get("env_vars", ""),
+            "added":        datetime.datetime.now().isoformat(),
+        }
+        if community_cfg.get("steam_app_id"):
+            new_cfg["steam_app_id"] = str(community_cfg["steam_app_id"])
+        all_g.append(new_cfg)
+        save_games(all_g)
+        rclone_mod.rclone_push_games_json()
+        return new_cfg
+
+    def _done(game_cfg):
+        stop_progress()
+        # Skip the type/shortcut picker — we already know the shortcut from the lookup step
+        _assign_s3_paths(game_cfg, ns_entry, shortcuts_data, vdf_path,
+                         native_steam=native_steam, native_app_id=native_app_id)
+
+    run_async(_work, (), _done)
 
 
 def _assign_update_all():

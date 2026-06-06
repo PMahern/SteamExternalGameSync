@@ -168,6 +168,12 @@ def _install_run(exe_path: str, app_name: str, internal_name: str):
             return log_lines
         log_lines.append(("Shortcut written to shortcuts.vdf", True))
 
+        try:
+            from games import hash_file, store_install_hash
+            store_install_hash(str(app_id), hash_file(Path(exe_path)))
+        except Exception:
+            pass
+
         ok, msg = set_compat_tool(app_id, internal_name)
         log_lines.append((
             f"Proton set to {internal_name}" if ok else f"Failed to set Proton: {msg}",

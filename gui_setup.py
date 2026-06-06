@@ -131,6 +131,99 @@ def flow_setup():
             dpg.add_button(label="Cancel", width=80, height=32,
                            callback=refresh_and_home)
 
+    # ── Community database (optional) ─────────────────────────────────────────
+    dpg.add_spacer(height=20, parent="content_group")
+    dpg.add_separator(parent="content_group")
+    dpg.add_spacer(height=12, parent="content_group")
+
+    dpg.add_text("Community Game Database  (Optional)", parent="content_group")
+    dpg.add_text(
+        "Sign in to search the community database for existing game configs and to share\n"
+        "your own configs with other users. Not required for save syncing.",
+        parent="content_group", color=(130, 130, 155), wrap=700,
+    )
+    dpg.add_spacer(height=8, parent="content_group")
+
+    try:
+        from community.client import available as comm_available, is_signed_in
+        comm_ok = comm_available()
+        comm_in = comm_ok and is_signed_in()
+    except Exception:
+        comm_ok = comm_in = False
+    try:
+        from community.client import signed_in_provider
+        comm_provider = signed_in_provider() if comm_in else None
+    except Exception:
+        comm_provider = None
+
+    if not comm_ok:
+        dpg.add_text("Community service not configured in community/client.py.",
+                     parent="content_group", color=(130, 130, 155))
+    else:
+        provider_label = comm_provider.capitalize() if comm_provider else ""
+        status_txt   = f"Signed in via {provider_label}" if comm_in else "Not signed in"
+        status_color = (45, 164, 78) if comm_in else (130, 130, 155)
+        dpg.add_text(status_txt, tag="_comm_status",
+                     parent="content_group", color=status_color)
+        dpg.add_text("", tag="_comm_err", parent="content_group",
+                     color=(207, 34, 46), show=False)
+        dpg.add_spacer(height=6, parent="content_group")
+        with dpg.group(horizontal=True, parent="content_group"):
+            dpg.add_combo(tag="_comm_provider", items=["GitHub", "Google"],
+                          default_value="GitHub", width=110, show=not comm_in)
+            dpg.add_button(label="Sign In", width=90, height=22,
+                           tag="_comm_signin_btn", callback=_community_sign_in,
+                           show=not comm_in)
+            dpg.add_button(label="Sign Out", width=90, height=22,
+                           tag="_comm_signout_btn", callback=_community_sign_out,
+                           show=comm_in)
+
+
+_COMM_PROVIDER_MAP = {"GitHub": "github", "Google": "google"}
+
+
+def _community_sign_in():
+    provider_label = dpg.get_value("_comm_provider") if dpg.does_item_exist("_comm_provider") else "GitHub"
+    provider_key   = _COMM_PROVIDER_MAP.get(provider_label, "github")
+
+    if dpg.does_item_exist("_comm_signin_btn"):
+        dpg.configure_item("_comm_signin_btn", enabled=False, label="Opening browser...")
+    if dpg.does_item_exist("_comm_status"):
+        dpg.set_value("_comm_status", "Waiting for browser sign-in...")
+        dpg.configure_item("_comm_status", color=(130, 130, 155))
+    if dpg.does_item_exist("_comm_err"):
+        dpg.configure_item("_comm_err", show=False)
+
+    def _work():
+        from community.client import sign_in
+        return sign_in(provider_key)
+
+    def _done(result):
+        ok, msg = result
+        if ok:
+            # Rebuild the whole setup page so the sign-out button appears inline
+            flow_setup()
+        else:
+            if dpg.does_item_exist("_comm_signin_btn"):
+                dpg.configure_item("_comm_signin_btn", enabled=True, label="Sign In")
+            if dpg.does_item_exist("_comm_status"):
+                dpg.set_value("_comm_status", "Not signed in")
+                dpg.configure_item("_comm_status", color=(130, 130, 155))
+            if dpg.does_item_exist("_comm_err"):
+                dpg.set_value("_comm_err", f"Sign-in failed: {msg}")
+                dpg.configure_item("_comm_err", show=True)
+
+    run_async(_work, (), _done)
+
+
+def _community_sign_out():
+    try:
+        from community.client import sign_out
+        sign_out()
+    except Exception:
+        pass
+    flow_setup()
+
 
 def _setup_connect():
     provider_label = dpg.get_value("_setup_provider") if dpg.does_item_exist("_setup_provider") else "Nextcloud"

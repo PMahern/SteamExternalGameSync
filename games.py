@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-from config import SYNC_ROOT, GAMES_JSON
+from config import SYNC_ROOT, GAMES_JSON, APP_CONFIG_DIR
 
 
 def load_games() -> list[dict]:
@@ -62,6 +62,42 @@ def add_game_hash(game_id: str, hash_val: str, field: str) -> bool:
             save_games(games)
             return True
     return False
+
+
+_INSTALL_HASHES_FILE = APP_CONFIG_DIR / "install_hashes.json"
+
+
+def store_install_hash(app_id: str, hash_val: str) -> None:
+    """Persist an installer hash keyed by Steam shortcut app_id.
+
+    Called by the Install Game flow right after the shortcut is written, so
+    the hash is available later when the user goes to assign a community config.
+    """
+    path = _INSTALL_HASHES_FILE
+    data: dict = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            pass
+    entry = data.setdefault(str(app_id), {})
+    hashes = entry.get("installer_hashes", [])
+    if hash_val not in hashes:
+        hashes.append(hash_val)
+        entry["installer_hashes"] = hashes
+        APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+
+
+def load_install_hashes(app_id: str) -> list[str]:
+    """Return installer hashes previously stored for a Steam shortcut app_id."""
+    if not _INSTALL_HASHES_FILE.exists():
+        return []
+    try:
+        data = json.loads(_INSTALL_HASHES_FILE.read_text())
+        return data.get(str(app_id), {}).get("installer_hashes", [])
+    except Exception:
+        return []
 
 
 def get_local_save_path(game_id: str, game: dict | None = None) -> Path:

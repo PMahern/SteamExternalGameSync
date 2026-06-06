@@ -219,24 +219,28 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
                            width=1, show=False, parent="content_group")
 
     def _next():
-        name = dpg.get_value("_add_name").strip()
-        if not name:
-            return
-        if native_steam:
-            aid = native_app_id or ""
-        else:
-            aid = dpg.get_value(aid_tag).strip() if dpg.does_item_exist(aid_tag) else ""
-        if sys.platform != "win32" and not aid:
-            return
-        existing = next(
-            (g for g in load_games() if g["id"] == game_id_from_name(name)),
-            None,
-        )
-        if existing:
-            _add_s2c_confirm_overwrite(ns_entry, shortcuts_data, vdf_path, name, aid,
-                                       existing, native_steam)
-        else:
-            _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path, name, aid, native_steam)
+        try:
+            name = dpg.get_value("_add_name").strip()
+            if not name:
+                return
+            if native_steam:
+                aid = native_app_id or ""
+            else:
+                aid = dpg.get_value(aid_tag).strip() if dpg.does_item_exist(aid_tag) else ""
+            if sys.platform != "win32" and not aid:
+                return
+            existing = next(
+                (g for g in load_games() if g["id"] == game_id_from_name(name)),
+                None,
+            )
+            if existing:
+                _add_s2c_confirm_overwrite(ns_entry, shortcuts_data, vdf_path, name, aid,
+                                           existing, native_steam)
+            else:
+                _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path, name, aid, native_steam)
+        except Exception:
+            import traceback
+            show_error("Add Config Error", traceback.format_exc())
 
     def _back():
         if native_steam:
@@ -433,15 +437,23 @@ def _lud_resolve_and_proceed(ns_entry, shortcuts_data, vdf_path,
         suggested_exe   = None
         suggested_saves = []
 
-        fixed = ludusavi.get_fixed_save_paths(entry_data, app_id if sys.platform != "win32" else None)
+        fixed = ludusavi.get_fixed_save_paths(
+            entry_data, app_id if sys.platform != "win32" else None
+        )
         suggested_saves.extend(fixed)
 
-        if sys.platform != "win32" and app_id:
-            hints       = list(entry_data.get("installDir", {}).keys())
-            install_dir = ludusavi.find_install_dir(app_id, hints)
+        install_dir = None
+        if app_id:
+            if sys.platform == "win32":
+                from steam import find_steam_game_dir
+                install_dir = find_steam_game_dir(app_id)
+            else:
+                hints       = list(entry_data.get("installDir", {}).keys())
+                install_dir = ludusavi.find_install_dir(app_id, hints)
             if install_dir:
-                rel_saves = ludusavi.get_install_relative_save_paths(entry_data, install_dir)
-                suggested_saves.extend(rel_saves)
+                suggested_saves.extend(
+                    ludusavi.get_install_relative_save_paths(entry_data, install_dir)
+                )
                 exe = ludusavi.find_exe_in_dir(install_dir, game_name)
                 if exe:
                     suggested_exe = str(exe)
@@ -450,6 +462,9 @@ def _lud_resolve_and_proceed(ns_entry, shortcuts_data, vdf_path,
 
     def _done(result):
         stop_progress()
+        if isinstance(result, list) and result and isinstance(result[0], tuple):
+            show_error("Manifest Lookup Error", result[0][0])
+            return
         suggested_exe, suggested_saves = result
         _add_s3_paths(ns_entry, shortcuts_data, vdf_path, game_name, app_id,
                       manifest_entry=entry_data,
@@ -501,7 +516,7 @@ def _add_s3_paths(ns_entry, shortcuts_data, vdf_path,
         return str(Path.home())
 
     dpg.add_text("Paths", parent="content_group")
-    if native_steam and sys.platform != "win32":
+    if native_steam:
         dpg.add_text(
             "Executable: provided automatically by Steam at launch -- no path needed.",
             parent="content_group", color=(130, 130, 155),
@@ -549,7 +564,7 @@ def _add_s3_paths(ns_entry, shortcuts_data, vdf_path,
     def _run():
         exe_p  = dpg.get_value(exe_tag).strip() if dpg.does_item_exist(exe_tag) else ""
         save_p = dpg.get_value(save_tag).strip()
-        if (not exe_p and not (native_steam and sys.platform != "win32")) or not save_p:
+        if (not exe_p and not native_steam) or not save_p:
             return
         _add_run(ns_entry, shortcuts_data, vdf_path, game_name, app_id,
                  Path(exe_p) if exe_p else None, Path(save_p),
@@ -581,7 +596,7 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
             else:
                 raw = ns_entry.get("appid") or 0
                 aid = str(raw & 0xFFFFFFFF) if raw else None
-            exe_rel  = str(exe_real)
+            exe_rel  = str(exe_real) if exe_real else ""
             save_rel = str(save_real)
             mc = {"platform": "windows", "exe_path": exe_rel, "save_path": save_rel,
                   "app_id": aid}
@@ -608,6 +623,15 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
         if disc_image:
             mc["disc_image"] = disc_image
 
+        # Normalize paths for games.json (shared/community).
+        # On Windows: mc keeps absolute paths for local sync; new_cfg gets variable form.
+        # On Linux: drive_c-relative steamuser paths are normalized to variable form too.
+        if sys.platform == "win32":
+            exe_rel  = ludusavi.normalize_path_for_storage(exe_real) if exe_real else ""
+            save_rel = ludusavi.normalize_path_for_storage(save_real)
+        else:
+            save_rel = ludusavi.normalize_path_for_storage(save_rel)
+
         rclone_mod.rclone_pull_games_json()
         all_g = [g for g in load_games() if g["id"] != game_id]
         new_cfg = {
@@ -619,6 +643,8 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
             "env_vars":    env_vars,
             "added":       datetime.datetime.now().isoformat(),
         }
+        if native_steam and aid:
+            new_cfg["steam_app_id"] = aid
         if exe_real and exe_real.is_file():
             try:
                 new_cfg["exe_hashes"] = [hash_file(exe_real)]
