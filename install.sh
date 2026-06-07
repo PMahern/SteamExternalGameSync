@@ -179,6 +179,14 @@ if [[ -f "$PRELAUNCHER_PREBUILT" ]]; then
     # Pre-built binary shipped with the repo — always overwrite so updates deploy
     cp "$PRELAUNCHER_PREBUILT" "$PRELAUNCHER_EXE"
     echo "✓ pre-launcher.exe installed from repo"
+    # Copy SDL2 DLLs required by pre-launcher.exe under Wine/Proton
+    for _dll in SDL2.dll SDL2_ttf.dll; do
+        _dll_src="$SCRIPT_DIR/pre-launcher/$_dll"
+        if [[ -f "$_dll_src" ]]; then
+            cp "$_dll_src" "$APP_DIR/$_dll"
+            echo "✓ $_dll installed"
+        fi
+    done
 elif [[ ! -f "$PRELAUNCHER_SRC" ]]; then
     echo "[warn] pre-launcher/pre-launcher.c not found — skipping"
 elif command -v x86_64-w64-mingw32-gcc &>/dev/null; then
