@@ -137,7 +137,7 @@ fi
 
 # Locate SDL2/SDL2_ttf Windows mingw headers and libs.
 # Check: (1) Arch/SteamOS system layout, (2) locally downloaded zips.
-WIN_CFLAGS="-DSDL_MAIN_HANDLED"
+WIN_CFLAGS=""
 WIN_LIBS="-lSDL2main -lSDL2 -lSDL2_ttf -mwindows"
 WIN_INC=""
 WIN_LIBDIR=""
@@ -145,7 +145,7 @@ WIN_LIBDIR=""
 _find_mingw_sdl2() {
     # Arch/SteamOS: /usr/x86_64-w64-mingw32/include/SDL2/
     if [ -f "/usr/x86_64-w64-mingw32/include/SDL2/SDL.h" ]; then
-        WIN_INC="/usr/x86_64-w64-mingw32/include/SDL2"
+        WIN_INC="/usr/x86_64-w64-mingw32/include"
         WIN_LIBDIR="/usr/x86_64-w64-mingw32/lib"
         return 0
     fi
@@ -153,7 +153,7 @@ _find_mingw_sdl2() {
     local local_pfx
     local_pfx="$(pwd)/sdl2-mingw/x86_64-w64-mingw32"
     if [ -f "$local_pfx/include/SDL2/SDL.h" ]; then
-        WIN_INC="$local_pfx/include/SDL2"
+        WIN_INC="$local_pfx/include"
         WIN_LIBDIR="$local_pfx/lib"
         return 0
     fi

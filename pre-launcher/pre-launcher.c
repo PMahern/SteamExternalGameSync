@@ -1002,8 +1002,8 @@ int main(int argc, char *argv[])
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
     TTF_Init();
 
+    ipc_init();   /* must run before diag_open so /tmp/externalgamesync/ exists */
     diag_open();
-    ipc_init();
 
     EgsStatus s = {0};
     read_status(&s);

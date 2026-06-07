@@ -125,6 +125,7 @@ def _assign_update_all():
                     real_exe=str(exe_real),
                     start_dir=ns_entry["start_dir"],
                     game_cfg=game_cfg,
+                    linux_native=mc.get("platform") == "linux_native",
                 )
                 log.append((f"{game_cfg['name']}: {'updated' if ok else msg}", ok))
 
@@ -214,8 +215,11 @@ def _assign_s2_shortcut(game_cfg: dict):
             return
         ns = idx_map.get(sel[0])
         if ns:
+            exe_str = ns.get("exe", "").strip().strip('"')
+            _linux_native = sys.platform != "win32" and exe_str and not exe_str.lower().endswith(".exe")
             _assign_s3_paths(game_cfg, ns, shortcuts_data, vdf_path,
-                             native_steam=False, native_app_id=None)
+                             native_steam=False, native_app_id=None,
+                             linux_native=_linux_native)
 
     add_action_bar("Next -->", _next, back_cb=lambda: _assign_s2_type(game_cfg))
 
@@ -322,7 +326,8 @@ def _find_prefix_for_game(game_cfg: dict) -> tuple[str, str, str]:
 
 
 def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
-                     native_steam: bool = False, native_app_id: str | None = None):
+                     native_steam: bool = False, native_app_id: str | None = None,
+                     linux_native: bool = False):
     import os
     clear_content()
     add_header("Assign Config", "Step 3 -- Confirm or browse paths")
@@ -347,28 +352,52 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
         dpg.add_input_text(tag=aid_tag, default_value=native_app_id or "",
                            width=1, show=False, parent="content_group")
     else:
-        if native_steam and native_app_id:
+        if linux_native:
+            # Native Linux app — no Proton prefix. Store the shortcut's app ID so we
+            # can find it in shortcuts.vdf later; it's not a compatdata ID.
+            raw_appid = ns_entry.get("appid") or 0
+            _ln_aid = str(int(raw_appid) & 0xFFFFFFFF) if raw_appid else ""
+            auto_aid_val = ""  # don't trigger the "Game found in prefix" status msg
+            dpg.add_text("Native Linux app detected -- no Proton prefix needed.",
+                         parent="content_group", color=(45, 164, 78))
+            dpg.add_input_text(tag=aid_tag, default_value=_ln_aid,
+                               width=1, show=False, parent="content_group")
+            # Pre-fill save path by expanding XDG vars from the shared games.json entry
+            _sp = game_cfg.get("save_path", "")
+            if _sp:
+                _h = Path.home()
+                for _var, _val in [
+                    ("<xdgData>",   str(_h / ".local" / "share")),
+                    ("<xdgConfig>", str(_h / ".config")),
+                    ("<xdgCache>",  str(_h / ".cache")),
+                    ("<home>",      str(_h)),
+                ]:
+                    _sp = _sp.replace(_var, _val)
+                if "<" not in _sp:
+                    auto_save_val = _sp
+        elif native_steam and native_app_id:
             # For native Steam, exe is in steamapps/common — save is in drive_c
             auto_aid_val = native_app_id
             save_p = resolve_save_path(native_app_id, game_cfg.get("save_path", ""))
             auto_save_val = str(save_p.resolve())
             # Don't try to auto-fill the exe — it lives in steamapps/common,
             # not drive_c, so the user needs to browse to it there.
+            dpg.add_input_text(tag=aid_tag, default_value=auto_aid_val,
+                               width=1, show=False, parent="content_group")
         else:
             auto_aid_val, auto_exe_val, auto_save_val = _find_prefix_for_game(game_cfg)
 
-        dpg.add_text("Proton Prefix (App ID)", parent="content_group")
-        aid_readonly = native_steam and native_app_id
-        dpg.add_input_text(tag=aid_tag,
-                           default_value=auto_aid_val,
-                           hint="App ID (e.g. 123456789)", width=300,
-                           enabled=not aid_readonly,
-                           parent="content_group")
-        if aid_readonly:
-            dpg.add_text("  (fixed — native Steam game uses its own prefix)",
-                         parent="content_group", color=(130, 130, 155))
+            dpg.add_text("Proton Prefix (App ID)", parent="content_group")
+            aid_readonly = native_steam and native_app_id
+            dpg.add_input_text(tag=aid_tag,
+                               default_value=auto_aid_val,
+                               hint="App ID (e.g. 123456789)", width=300,
+                               enabled=not aid_readonly,
+                               parent="content_group")
+            if aid_readonly:
+                dpg.add_text("  (fixed — native Steam game uses its own prefix)",
+                             parent="content_group", color=(130, 130, 155))
 
-        if not native_steam:
             prefix_rows = list_proton_prefixes()
             pfx_state = None
             if prefix_rows:
@@ -416,7 +445,7 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
 
     dpg.add_text("", tag="_detect_ok", parent="content_group",
                  color=(45, 164, 78), wrap=700, show=False)
-    if sys.platform != "win32":
+    if sys.platform != "win32" and not linux_native:
         dpg.add_button(label="Auto-detect paths from selected prefix",
                        callback=_autodetect, width=-1, height=28,
                        parent="content_group")
@@ -442,13 +471,15 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
     def _save_start():
         if sys.platform == "win32":
             return os.environ.get("APPDATA", str(Path.home()))
+        if linux_native:
+            return str(Path.home())
         aid = dpg.get_value(aid_tag).strip() if dpg.does_item_exist(aid_tag) else ""
         if aid:
             r = proton_drive_c(aid) / "users" / "steamuser" / "AppData" / "Roaming"
             return str(r) if r.exists() else str(proton_drive_c(aid))
         return str(Path.home())
 
-    if native_steam:
+    if native_steam or linux_native:
         dpg.add_text(
             "Executable: provided automatically by Steam at launch -- no path needed.",
             parent="content_group", color=(130, 130, 155),
@@ -508,7 +539,7 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
     def _run():
         exe_p  = dpg.get_value(exe_tag).strip() if dpg.does_item_exist(exe_tag) else ""
         save_p = dpg.get_value(save_tag).strip()
-        if (not exe_p and not native_steam) or not save_p:
+        if (not exe_p and not native_steam and not linux_native) or not save_p:
             return
         exe_real  = Path(exe_p) if exe_p else None
         save_real = Path(save_p)
@@ -526,16 +557,23 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
             ev = None
         else:
             aid = dpg.get_value(aid_tag).strip()
-            if not aid:
-                return
             ev = dpg.get_value(env_tag).strip()
-            mc = {"platform": "linux", "app_id": aid}
-            if native_steam:
-                mc["native_steam"] = True
+            if linux_native:
+                import ludusavi
+                mc = {"platform": "linux_native", "app_id": aid,
+                      "save_path": str(save_real.resolve())}
+                save_rel = ludusavi.normalize_path_for_storage(save_real.resolve())
+            else:
+                if not aid:
+                    return
+                mc = {"platform": "linux", "app_id": aid}
+                if native_steam:
+                    mc["native_steam"] = True
         disc = dpg.get_value(disc_tag).strip() if dpg.does_item_exist(disc_tag) else ""
         _assign_run(game_cfg, ns_entry, shortcuts_data, vdf_path,
                     exe_real, save_real, mc, aid,
-                    env_vars=ev, disc_image=disc, native_steam=native_steam)
+                    env_vars=ev, disc_image=disc, native_steam=native_steam,
+                    linux_native=linux_native)
 
     def _back():
         if native_steam:
@@ -549,8 +587,9 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
 def _assign_run(game_cfg, ns_entry, shortcuts_data, vdf_path,
                 exe_real: Path | None, save_real: Path, machine_cfg: dict,
                 steam_app_id: str | None, env_vars: str | None = None,
-                disc_image: str = "", native_steam: bool = False):
-    from steam import _to_drive_c_rel, make_save_symlink
+                disc_image: str = "", native_steam: bool = False,
+                linux_native: bool = False):
+    from steam import _to_drive_c_rel, make_save_symlink, make_save_symlink_native
     name = game_cfg["name"]
     show_progress(f"Configuring '{name}'...")
 
@@ -559,13 +598,17 @@ def _assign_run(game_cfg, ns_entry, shortcuts_data, vdf_path,
         if native_steam:
             shutdown_steam_sync()
         if sys.platform != "win32":
-            try:
-                drive_c  = proton_drive_c(steam_app_id)
-                save_rel = str(save_real.resolve().relative_to(drive_c.resolve()))
-            except ValueError:
-                save_rel = _to_drive_c_rel(game_cfg["save_path"])
-            ok, msg = make_save_symlink(game_cfg["id"], steam_app_id, save_rel)
-            log.append((f"Save symlink {'created' if ok else 'failed'}: {msg}", ok))
+            if linux_native:
+                ok, msg = make_save_symlink_native(game_cfg["id"], save_real.resolve())
+                log.append((f"Save symlink {'created' if ok else 'failed'}: {msg}", ok))
+            else:
+                try:
+                    drive_c  = proton_drive_c(steam_app_id)
+                    save_rel = str(save_real.resolve().relative_to(drive_c.resolve()))
+                except ValueError:
+                    save_rel = _to_drive_c_rel(game_cfg["save_path"])
+                ok, msg = make_save_symlink(game_cfg["id"], steam_app_id, save_rel)
+                log.append((f"Save symlink {'created' if ok else 'failed'}: {msg}", ok))
 
         # Save machine config before pull/push so get_local_save_path resolves
         # the correct Windows save directory (not the SYNC_ROOT fallback).
@@ -594,10 +637,11 @@ def _assign_run(game_cfg, ns_entry, shortcuts_data, vdf_path,
                 shortcut_index=ns_entry["index"],
                 game_name=game_cfg["name"],
                 savesync_bin=SAVESYNC_BIN,
-                real_exe=str(exe_real),
+                real_exe=str(exe_real) if exe_real else "",
                 start_dir=ns_entry["start_dir"],
                 game_cfg=game_cfg,
                 disc_image_override=disc_image,
+                linux_native=linux_native,
             )
             log.append((f"Steam shortcut {'updated' if ok3 else 'failed: ' + msg3}", ok3))
 

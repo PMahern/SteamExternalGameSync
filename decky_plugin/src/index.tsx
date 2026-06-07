@@ -1,4 +1,5 @@
 import type {} from 'react';
+import * as React from 'react';
 import appIcon from '../../icon.png';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { callable, definePlugin, routerHook } from '@decky/api';
@@ -243,6 +244,62 @@ import SyncPage from './SyncPage';
 
 const MANAGE_ROUTE = '/externalgamesync-manage';
 
+// Safe wrappers: fall back to plain HTML if the dynamic module finder returns undefined
+// (happens when Steam updates change internal component implementations)
+const SafePanelSection: React.FC<{ title?: string; children?: React.ReactNode }> =
+  (PanelSection as any) ??
+  (({ title, children }) => (
+    <div style={{ marginBottom: '12px' }}>
+      {title && <div style={{ color: '#67c1f5', fontSize: '11px', textTransform: 'uppercase', fontWeight: 600, marginBottom: '6px', padding: '0 8px' }}>{title}</div>}
+      {children}
+    </div>
+  ));
+
+const SafePanelSectionRow: React.FC<{ children?: React.ReactNode }> =
+  (PanelSectionRow as any) ??
+  (({ children }) => <div style={{ padding: '4px 8px' }}>{children}</div>);
+
+const SafeButtonItem: React.FC<{ layout?: string; onClick?: () => void; children?: React.ReactNode }> =
+  (ButtonItem as any) ??
+  (({ onClick, children }) => (
+    <button
+      onClick={onClick}
+      style={{
+        width: '100%', padding: '10px 12px', background: 'rgba(255,255,255,0.07)',
+        border: 'none', borderRadius: '4px', color: '#fff', fontSize: '14px',
+        cursor: 'pointer', textAlign: 'left',
+      }}
+    >
+      {children}
+    </button>
+  ));
+
+interface ToggleFieldProps {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (val: boolean) => void;
+  disabled?: boolean;
+}
+
+const SafeToggleField: React.FC<ToggleFieldProps> =
+  (ToggleField as any) ??
+  (({ label, description, checked, onChange, disabled }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', opacity: disabled ? 0.5 : 1 }}>
+      <div>
+        <div style={{ fontSize: '13px', fontWeight: 500 }}>{label}</div>
+        {description && <div style={{ fontSize: '11px', color: '#8899a6', marginTop: '2px' }}>{description}</div>}
+      </div>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={e => onChange(e.target.checked)}
+        style={{ cursor: disabled ? 'default' : 'pointer' }}
+      />
+    </div>
+  ));
+
 interface SettingsRef {
   polling_enabled: boolean;
   poll_auto_pull:  boolean;
@@ -282,33 +339,33 @@ function Content({ settingsRef }: { settingsRef: SettingsRef }) {
 
   return (
     <>
-      <PanelSection title="Save Sync">
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => { Router.CloseSideMenus(); Router.Navigate(MANAGE_ROUTE); }}>
+      <SafePanelSection title="Save Sync">
+        <SafePanelSectionRow>
+          <SafeButtonItem layout="below" onClick={() => { Router.CloseSideMenus?.(); Router.Navigate?.(MANAGE_ROUTE); }}>
             Manage Saves
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
-      <PanelSection title="Settings">
-        <PanelSectionRow>
-          <ToggleField
+          </SafeButtonItem>
+        </SafePanelSectionRow>
+      </SafePanelSection>
+      <SafePanelSection title="Settings">
+        <SafePanelSectionRow>
+          <SafeToggleField
             label="Background Polling"
             description="Check for save changes every 5 min"
             checked={pollingEnabled}
             onChange={handlePollingChange}
             disabled={!loaded}
           />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
+        </SafePanelSectionRow>
+        <SafePanelSectionRow>
+          <SafeToggleField
             label="Auto-pull on Poll"
             description="Pull cloud saves when no conflict detected"
             checked={pollAutoPull}
             onChange={handleAutoPullChange}
             disabled={!loaded || !pollingEnabled}
           />
-        </PanelSectionRow>
-      </PanelSection>
+        </SafePanelSectionRow>
+      </SafePanelSection>
     </>
   );
 }

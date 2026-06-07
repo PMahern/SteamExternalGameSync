@@ -13,7 +13,7 @@
   },
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
-    "@decky/ui": "^4.11.0",
+    "@decky/ui": "^4.11.6",
     "@types/react": "19.1.1",
     "@types/react-dom": "19.1.1",
     "rollup": "^4.53.3",
