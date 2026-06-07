@@ -15,7 +15,7 @@ from sync import (
     rclone_sync_pull, rclone_sync_push, rclone_sync_pull_force,
     PULL_CONFLICT,
 )
-from steam import make_save_symlink
+from steam import make_save_symlink, make_save_symlink_native
 from artwork import push_art_to_nextcloud, pull_art_from_nextcloud
 from gui_common import (
     set_nav_active, set_nav_enabled, clear_content, add_header, add_action_bar,
@@ -422,6 +422,13 @@ def _run_relink():
                 sp  = mc.get("save_path", "")
                 ok  = bool(sp and Path(sp).exists())
                 msg = sp if ok else f"Not found: {sp}"
+                results.append((g["name"], ok, msg))
+            elif mc.get("platform") == "linux_native":
+                sp = mc.get("save_path", "")
+                if sp:
+                    ok, msg = make_save_symlink_native(g["id"], Path(sp))
+                else:
+                    ok, msg = False, "No save path in machine config"
                 results.append((g["name"], ok, msg))
             else:
                 ok, msg = make_save_symlink(g["id"], mc["app_id"], g["save_path"])

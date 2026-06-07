@@ -25,6 +25,16 @@ const definePlugin = (fn) => {
     };
 };
 
+// Safe wrappers in case dynamic module finders return undefined after a Steam update
+const SafeDialogButton = DFL.DialogButton ??
+    (({ disabled, onClick, style, children }) => (SP_JSX.jsx("button", { disabled: disabled, onClick: onClick, style: {
+            padding: '6px 12px', background: disabled ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.12)',
+            border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px',
+            color: disabled ? '#888' : '#fff', cursor: disabled ? 'default' : 'pointer',
+            fontSize: '13px', ...style,
+        }, children: children })));
+const SafeFocusable = DFL.Focusable ??
+    (({ style, children }) => SP_JSX.jsx("div", { style: style, children: children }));
 // ── Backend callables ─────────────────────────────────────────────────────────
 const getGames = callable('get_games');
 const syncGame$1 = callable('sync_game');
@@ -176,7 +186,7 @@ function SyncPage() {
     }, [resolvingGames, updateGame]);
     const anySyncing = isSyncingAll || syncingGames.size > 0;
     const conflictCount = gameStates.filter(g => g.status === 'conflict').length;
-    return (SP_JSX.jsxs("div", { style: { overflowY: 'auto', height: '100%', padding: '48px 16px 16px' }, children: [SP_JSX.jsx("div", { style: { fontSize: '20px', fontWeight: 700, marginBottom: '12px' }, children: "Manage ExternalGameSync Saves" }), conflictCount > 0 && (SP_JSX.jsxs("div", { style: { color: '#e74c3c', fontSize: '13px', marginBottom: '8px' }, children: [conflictCount, " conflict", conflictCount !== 1 ? 's' : '', " \u2014 choose what to keep below"] })), SP_JSX.jsx(DFL.Focusable, { style: { marginBottom: '16px' }, children: SP_JSX.jsx(DFL.DialogButton, { disabled: anySyncing || !loaded, onClick: handleSyncAll, style: { width: '100%' }, children: isSyncingAll ? 'Syncing...' : 'Sync All' }) }), SP_JSX.jsxs(DFL.Focusable, { style: { display: 'flex', flexDirection: 'column', gap: '4px' }, children: [loaded && gameStates.length === 0 && (SP_JSX.jsx("div", { style: { color: '#8899a6', padding: '8px 0' }, children: "No games assigned to this machine." })), gameStates.map(g => {
+    return (SP_JSX.jsxs("div", { style: { overflowY: 'auto', height: '100%', padding: '48px 16px 16px' }, children: [SP_JSX.jsx("div", { style: { fontSize: '20px', fontWeight: 700, marginBottom: '12px' }, children: "Manage ExternalGameSync Saves" }), conflictCount > 0 && (SP_JSX.jsxs("div", { style: { color: '#e74c3c', fontSize: '13px', marginBottom: '8px' }, children: [conflictCount, " conflict", conflictCount !== 1 ? 's' : '', " \u2014 choose what to keep below"] })), SP_JSX.jsx(SafeFocusable, { style: { marginBottom: '16px' }, children: SP_JSX.jsx(SafeDialogButton, { disabled: anySyncing || !loaded, onClick: handleSyncAll, style: { width: '100%' }, children: isSyncingAll ? 'Syncing...' : 'Sync All' }) }), SP_JSX.jsxs(SafeFocusable, { style: { display: 'flex', flexDirection: 'column', gap: '4px' }, children: [loaded && gameStates.length === 0 && (SP_JSX.jsx("div", { style: { color: '#8899a6', padding: '8px 0' }, children: "No games assigned to this machine." })), gameStates.map(g => {
                         const isConflict = g.status === 'conflict';
                         const isThisSyncing = g.status === 'syncing' || syncingGames.has(g.id);
                         const isResolving = resolvingGames.has(g.id);
@@ -192,7 +202,7 @@ function SyncPage() {
                             }, children: [SP_JSX.jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }, children: [SP_JSX.jsx("span", { style: {
                                                 fontSize: '14px', fontWeight: 500,
                                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                            }, children: g.name }), statusLabel !== '' && (SP_JSX.jsx("span", { style: { fontSize: '12px', color: statusColor, whiteSpace: 'nowrap', flexShrink: 0 }, children: statusLabel }))] }), SP_JSX.jsxs("div", { style: { display: 'flex', gap: '6px', flexShrink: 0 }, children: [!isConflict && !isSyncingAll && (SP_JSX.jsx(DFL.DialogButton, { disabled: isThisSyncing || anySyncing, onClick: () => handleSyncOne(g.id), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: isThisSyncing ? '...' : 'Sync' })), isConflict && (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.DialogButton, { disabled: isResolving, onClick: () => handleResolve(g.id, 'local'), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "Local" }), SP_JSX.jsx(DFL.DialogButton, { disabled: isResolving, onClick: () => handleResolve(g.id, 'remote'), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "Cloud" })] }))] })] }, g.id));
+                                            }, children: g.name }), statusLabel !== '' && (SP_JSX.jsx("span", { style: { fontSize: '12px', color: statusColor, whiteSpace: 'nowrap', flexShrink: 0 }, children: statusLabel }))] }), SP_JSX.jsxs("div", { style: { display: 'flex', gap: '6px', flexShrink: 0 }, children: [!isConflict && !isSyncingAll && (SP_JSX.jsx(SafeDialogButton, { disabled: isThisSyncing || anySyncing, onClick: () => handleSyncOne(g.id), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: isThisSyncing ? '...' : 'Sync' })), isConflict && (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(SafeDialogButton, { disabled: isResolving, onClick: () => handleResolve(g.id, 'local'), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "Local" }), SP_JSX.jsx(SafeDialogButton, { disabled: isResolving, onClick: () => handleResolve(g.id, 'remote'), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "Cloud" })] }))] })] }, g.id));
                     })] })] }));
 }
 
@@ -317,6 +327,20 @@ function SyncStatusBar({ appid }) {
     return (SP_JSX.jsx("div", { className: DFL.playSectionClasses.CloudStatusRow ?? '', style: { color: entry.color }, children: inner }));
 }
 const MANAGE_ROUTE = '/externalgamesync-manage';
+// Safe wrappers: fall back to plain HTML if the dynamic module finder returns undefined
+// (happens when Steam updates change internal component implementations)
+const SafePanelSection = DFL.PanelSection ??
+    (({ title, children }) => (SP_JSX.jsxs("div", { style: { marginBottom: '12px' }, children: [title && SP_JSX.jsx("div", { style: { color: '#67c1f5', fontSize: '11px', textTransform: 'uppercase', fontWeight: 600, marginBottom: '6px', padding: '0 8px' }, children: title }), children] })));
+const SafePanelSectionRow = DFL.PanelSectionRow ??
+    (({ children }) => SP_JSX.jsx("div", { style: { padding: '4px 8px' }, children: children }));
+const SafeButtonItem = DFL.ButtonItem ??
+    (({ onClick, children }) => (SP_JSX.jsx("button", { onClick: onClick, style: {
+            width: '100%', padding: '10px 12px', background: 'rgba(255,255,255,0.07)',
+            border: 'none', borderRadius: '4px', color: '#fff', fontSize: '14px',
+            cursor: 'pointer', textAlign: 'left',
+        }, children: children })));
+const SafeToggleField = DFL.ToggleField ??
+    (({ label, description, checked, onChange, disabled }) => (SP_JSX.jsxs("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', opacity: disabled ? 0.5 : 1 }, children: [SP_JSX.jsxs("div", { children: [SP_JSX.jsx("div", { style: { fontSize: '13px', fontWeight: 500 }, children: label }), description && SP_JSX.jsx("div", { style: { fontSize: '11px', color: '#8899a6', marginTop: '2px' }, children: description })] }), SP_JSX.jsx("input", { type: "checkbox", checked: checked, disabled: disabled, onChange: e => onChange(e.target.checked), style: { cursor: disabled ? 'default' : 'pointer' } })] })));
 function Content({ settingsRef }) {
     const [pollingEnabled, setPollingEnabled] = SP_REACT.useState(settingsRef.polling_enabled);
     const [pollAutoPull, setPollAutoPull] = SP_REACT.useState(settingsRef.poll_auto_pull);
@@ -345,7 +369,7 @@ function Content({ settingsRef }) {
         settingsRef.poll_auto_pull = val;
         setDeckySettings(pollingEnabled, val).catch(() => { });
     }, [pollingEnabled, settingsRef]);
-    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSection, { title: "Save Sync", children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => { DFL.Router.CloseSideMenus(); DFL.Router.Navigate(MANAGE_ROUTE); }, children: "Manage Saves" }) }) }), SP_JSX.jsxs(DFL.PanelSection, { title: "Settings", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Background Polling", description: "Check for save changes every 5 min", checked: pollingEnabled, onChange: handlePollingChange, disabled: !loaded }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Auto-pull on Poll", description: "Pull cloud saves when no conflict detected", checked: pollAutoPull, onChange: handleAutoPullChange, disabled: !loaded || !pollingEnabled }) })] })] }));
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(SafePanelSection, { title: "Save Sync", children: SP_JSX.jsx(SafePanelSectionRow, { children: SP_JSX.jsx(SafeButtonItem, { layout: "below", onClick: () => { DFL.Router.CloseSideMenus?.(); DFL.Router.Navigate?.(MANAGE_ROUTE); }, children: "Manage Saves" }) }) }), SP_JSX.jsxs(SafePanelSection, { title: "Settings", children: [SP_JSX.jsx(SafePanelSectionRow, { children: SP_JSX.jsx(SafeToggleField, { label: "Background Polling", description: "Check for save changes every 5 min", checked: pollingEnabled, onChange: handlePollingChange, disabled: !loaded }) }), SP_JSX.jsx(SafePanelSectionRow, { children: SP_JSX.jsx(SafeToggleField, { label: "Auto-pull on Poll", description: "Pull cloud saves when no conflict detected", checked: pollAutoPull, onChange: handleAutoPullChange, disabled: !loaded || !pollingEnabled }) })] })] }));
 }
 // ── Plugin entry point ─────────────────────────────────────────────────────────
 const GAME_ROUTE = '/library/app/:appid';

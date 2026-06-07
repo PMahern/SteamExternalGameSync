@@ -16,8 +16,9 @@ import rclone as rclone_mod
 from sync import rclone_sync_pull, rclone_sync_push
 from steam import (
     read_shortcuts, get_non_steam_games, update_shortcut_launch,
-    proton_drive_c, make_save_symlink,
+    proton_drive_c, make_save_symlink, make_save_symlink_native,
     list_steam_games, update_native_game_launch, find_steam_game_dir,
+    is_proton_game,
 )
 from gui_common import (
     SAVESYNC_BIN, set_nav_active, clear_content, add_header, add_action_bar,
@@ -68,7 +69,7 @@ def _add_s1_type():
     )
     dpg.add_text(
         "A game you bought on Steam that lacks working cloud saves (e.g. Dead Space 2).\n"
-        "Uses the game's own Proton prefix and sets its Steam launch options.",
+        "Works with both Proton and native Linux games. Sets Steam launch options.",
         parent="content_group", color=(130, 130, 155), wrap=700,
     )
     dpg.add_button(
@@ -147,10 +148,20 @@ def _add_s1_native():
             return
         sel_row = tbl["selected"]
         match   = next((g for g in state["games"] if g["app_id"] == sel_row[0]), None)
-        if match:
+        if not match:
+            return
+        show_progress("Detecting game type...")
+
+        def _detect():
+            return not is_proton_game(match["app_id"])
+
+        def _detect_done(linux_native):
+            stop_progress()
             _add_s2_details(ns_entry=None, shortcuts_data=None, vdf_path=None,
                             native_steam=True, native_app_id=match["app_id"],
-                            prefill_name=match["name"])
+                            prefill_name=match["name"], linux_native=linux_native)
+
+        run_async(_detect, (), _detect_done)
 
     add_action_bar("Next -->", _next, back_cb=_add_s1_type)
 
@@ -160,11 +171,21 @@ def _add_s1_native():
 def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
                     native_steam: bool = False,
                     native_app_id: str | None = None,
-                    prefill_name: str = ""):
+                    prefill_name: str = "",
+                    linux_native: bool = False):
+    # Auto-detect native Linux non-Steam shortcuts: exe doesn't end in .exe
+    if not linux_native and sys.platform != "win32" and not native_steam and ns_entry:
+        exe_str = ns_entry.get("exe", "").strip().strip('"')
+        if exe_str and not exe_str.lower().endswith(".exe"):
+            linux_native = True
+
     clear_content()
-    add_header("Add New Game Config",
-               "Step 2 -- Game name" +
-               (" and Proton prefix" if sys.platform != "win32" and not native_steam else ""))
+    subtitle = "Step 2 -- Game name"
+    if linux_native:
+        subtitle += " (native Linux app)"
+    elif sys.platform != "win32" and not native_steam:
+        subtitle += " and Proton prefix"
+    add_header("Add New Game Config", subtitle)
 
     default_name = prefill_name or (ns_entry["name"] if ns_entry else "")
     dpg.add_text("Display name", parent="content_group")
@@ -192,6 +213,14 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
                 "  Uncheck 'Keep games saves in the Steam Cloud'",
                 color=(200, 150, 50), wrap=750,
             )
+
+    elif linux_native:
+        # Native Linux app — no Proton prefix needed
+        dpg.add_spacer(height=8, parent="content_group")
+        dpg.add_text("Native Linux app detected — no Proton prefix needed.",
+                     parent="content_group", color=(130, 130, 155))
+        dpg.add_input_text(tag=aid_tag, default_value="",
+                           width=1, show=False, parent="content_group")
 
     elif sys.platform != "win32":
         detected = find_proton_prefix_for_ns_exe(ns_entry["exe"] if ns_entry else "")
@@ -227,7 +256,7 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
                 aid = native_app_id or ""
             else:
                 aid = dpg.get_value(aid_tag).strip() if dpg.does_item_exist(aid_tag) else ""
-            if sys.platform != "win32" and not aid:
+            if sys.platform != "win32" and not aid and not linux_native:
                 return
             existing = next(
                 (g for g in load_games() if g["id"] == game_id_from_name(name)),
@@ -235,9 +264,10 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
             )
             if existing:
                 _add_s2c_confirm_overwrite(ns_entry, shortcuts_data, vdf_path, name, aid,
-                                           existing, native_steam)
+                                           existing, native_steam, linux_native)
             else:
-                _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path, name, aid, native_steam)
+                _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path, name, aid, native_steam,
+                                  linux_native)
         except Exception:
             import traceback
             show_error("Add Config Error", traceback.format_exc())
@@ -253,7 +283,7 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
 
 def _add_s2c_confirm_overwrite(ns_entry, shortcuts_data, vdf_path,
                                game_name: str, app_id: str, existing: dict,
-                               native_steam: bool = False):
+                               native_steam: bool = False, linux_native: bool = False):
     clear_content()
     add_header("Add New Game Config", "Step 3 -- Game already exists")
 
@@ -279,13 +309,15 @@ def _add_s2c_confirm_overwrite(ns_entry, shortcuts_data, vdf_path,
     dpg.add_spacer(height=20, parent="content_group")
 
     def _continue():
-        _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path, game_name, app_id, native_steam)
+        _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path, game_name, app_id, native_steam,
+                          linux_native)
 
     def _back():
         _add_s2_details(ns_entry, shortcuts_data, vdf_path,
                         native_steam=native_steam,
                         native_app_id=app_id if native_steam else None,
-                        prefill_name=game_name)
+                        prefill_name=game_name,
+                        linux_native=linux_native)
 
     from gui_home import refresh_and_home
     with dpg.group(horizontal=True, parent="content_group"):
@@ -295,7 +327,8 @@ def _add_s2c_confirm_overwrite(ns_entry, shortcuts_data, vdf_path,
 
 
 def _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
-                      game_name: str, app_id: str, native_steam: bool = False):
+                      game_name: str, app_id: str, native_steam: bool = False,
+                      linux_native: bool = False):
     clear_content()
     add_header("Add New Game Config", "Step 3 -- Find in game database (optional)")
     dpg.add_text(
@@ -324,7 +357,7 @@ def _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
     def _skip():
         _add_s3_paths(ns_entry, shortcuts_data, vdf_path, game_name, app_id,
                       manifest_entry=None, suggested_exe=None, suggested_saves=[],
-                      native_steam=native_steam)
+                      native_steam=native_steam, linux_native=linux_native)
 
     def _next():
         if not state["entry"]:
@@ -332,14 +365,15 @@ def _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
         entry_name, entry_data = state["entry"]
         _lud_resolve_and_proceed(
             ns_entry, shortcuts_data, vdf_path, game_name, app_id,
-            entry_name, entry_data, native_steam,
+            entry_name, entry_data, native_steam, linux_native,
         )
 
     def _back():
         _add_s2_details(ns_entry, shortcuts_data, vdf_path,
                         native_steam=native_steam,
                         native_app_id=app_id if native_steam else None,
-                        prefill_name=game_name)
+                        prefill_name=game_name,
+                        linux_native=linux_native)
 
     dpg.add_separator(parent="content_group")
     dpg.add_spacer(height=4, parent="content_group")
@@ -474,33 +508,41 @@ def _lud_do_search(search_tag: str, results_tag: str, state: dict):
 
 def _lud_resolve_and_proceed(ns_entry, shortcuts_data, vdf_path,
                              game_name, app_id, entry_name, entry_data,
-                             native_steam: bool = False):
+                             native_steam: bool = False, linux_native: bool = False):
     show_progress("Looking up save paths...")
 
     def _work():
         suggested_exe   = None
         suggested_saves = []
 
-        fixed = ludusavi.get_fixed_save_paths(
-            entry_data, app_id if sys.platform != "win32" else None
-        )
-        suggested_saves.extend(fixed)
-
-        install_dir = None
-        if app_id:
-            if sys.platform == "win32":
-                from steam import find_steam_game_dir
+        if linux_native:
+            suggested_saves.extend(ludusavi.get_linux_save_paths(entry_data))
+            if app_id:
                 install_dir = find_steam_game_dir(app_id)
-            else:
-                hints       = list(entry_data.get("installDir", {}).keys())
-                install_dir = ludusavi.find_install_dir(app_id, hints)
-            if install_dir:
-                suggested_saves.extend(
-                    ludusavi.get_install_relative_save_paths(entry_data, install_dir)
-                )
-                exe = ludusavi.find_exe_in_dir(install_dir, game_name)
-                if exe:
-                    suggested_exe = str(exe)
+                if install_dir:
+                    suggested_saves.extend(
+                        ludusavi.get_install_relative_save_paths(entry_data, install_dir)
+                    )
+        else:
+            fixed = ludusavi.get_fixed_save_paths(
+                entry_data, app_id if sys.platform != "win32" else None
+            )
+            suggested_saves.extend(fixed)
+
+            install_dir = None
+            if app_id:
+                if sys.platform == "win32":
+                    install_dir = find_steam_game_dir(app_id)
+                else:
+                    hints       = list(entry_data.get("installDir", {}).keys())
+                    install_dir = ludusavi.find_install_dir(app_id, hints)
+                if install_dir:
+                    suggested_saves.extend(
+                        ludusavi.get_install_relative_save_paths(entry_data, install_dir)
+                    )
+                    exe = ludusavi.find_exe_in_dir(install_dir, game_name)
+                    if exe:
+                        suggested_exe = str(exe)
 
         return suggested_exe, list(dict.fromkeys(suggested_saves))
 
@@ -514,7 +556,7 @@ def _lud_resolve_and_proceed(ns_entry, shortcuts_data, vdf_path,
                       manifest_entry=entry_data,
                       suggested_exe=suggested_exe,
                       suggested_saves=suggested_saves,
-                      native_steam=native_steam)
+                      native_steam=native_steam, linux_native=linux_native)
 
     run_async(_work, (), _done)
 
@@ -522,7 +564,7 @@ def _lud_resolve_and_proceed(ns_entry, shortcuts_data, vdf_path,
 def _add_s3_paths(ns_entry, shortcuts_data, vdf_path,
                   game_name: str, app_id: str,
                   manifest_entry=None, suggested_exe=None, suggested_saves=None,
-                  native_steam: bool = False):
+                  native_steam: bool = False, linux_native: bool = False):
     import os
     clear_content()
     add_header("Add New Game Config", "Step 4 -- Select paths and options")
@@ -554,13 +596,15 @@ def _add_s3_paths(ns_entry, shortcuts_data, vdf_path,
     def _save_start():
         if sys.platform == "win32":
             return os.environ.get("APPDATA", str(Path.home()))
+        if linux_native:
+            return str(Path.home())
         if app_id:
             r = proton_drive_c(app_id) / "users" / "steamuser" / "AppData" / "Roaming"
             return str(r) if r.exists() else str(proton_drive_c(app_id))
         return str(Path.home())
 
     dpg.add_text("Paths", parent="content_group")
-    if native_steam:
+    if native_steam or linux_native:
         dpg.add_text(
             "Executable: provided automatically by Steam at launch -- no path needed.",
             parent="content_group", color=(130, 130, 155),
@@ -608,25 +652,26 @@ def _add_s3_paths(ns_entry, shortcuts_data, vdf_path,
     def _run():
         exe_p  = dpg.get_value(exe_tag).strip() if dpg.does_item_exist(exe_tag) else ""
         save_p = dpg.get_value(save_tag).strip()
-        if (not exe_p and not native_steam) or not save_p:
+        if (not exe_p and not native_steam and not linux_native) or not save_p:
             return
         _add_run(ns_entry, shortcuts_data, vdf_path, game_name, app_id,
                  Path(exe_p) if exe_p else None, Path(save_p),
                  dpg.get_value(env_tag).strip(),
                  dpg.get_value(filter_tag).strip(),
                  dpg.get_value(disc_tag).strip() if dpg.does_item_exist(disc_tag) else "",
-                 native_steam=native_steam)
+                 native_steam=native_steam, linux_native=linux_native)
 
     add_action_bar("Configure -->", _run,
                    back_cb=lambda: _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
-                                                     game_name, app_id, native_steam))
+                                                     game_name, app_id, native_steam,
+                                                     linux_native))
 
 
 def _add_run(ns_entry, shortcuts_data, vdf_path,
              game_name: str, app_id: str,
              exe_real: Path | None, save_real: Path,
              env_vars: str, save_filter: str, disc_image: str = "",
-             native_steam: bool = False):
+             native_steam: bool = False, linux_native: bool = False):
     game_id = game_id_from_name(game_name)
     show_progress(f"Configuring '{game_name}'...")
 
@@ -646,6 +691,12 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
                   "app_id": aid}
             if native_steam:
                 mc["native_steam"] = True
+        elif linux_native:
+            aid      = app_id
+            exe_rel  = ""
+            save_rel = ludusavi.normalize_path_for_storage(save_real.resolve())
+            mc = {"platform": "linux_native", "app_id": aid,
+                  "save_path": str(save_real.resolve())}
         else:
             aid     = app_id
             drive_c = proton_drive_c(aid)
@@ -669,11 +720,12 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
 
         # Normalize paths for games.json (shared/community).
         # On Windows: mc keeps absolute paths for local sync; new_cfg gets variable form.
-        # On Linux: drive_c-relative steamuser paths are normalized to variable form too.
+        # On Linux (Proton): drive_c-relative steamuser paths are normalized to variable form.
+        # On Linux (native): save_rel is already XDG-normalized above; exe_rel stays empty.
         if sys.platform == "win32":
             exe_rel  = ludusavi.normalize_path_for_storage(exe_real) if exe_real else ""
             save_rel = ludusavi.normalize_path_for_storage(save_real)
-        else:
+        elif not linux_native:
             save_rel = ludusavi.normalize_path_for_storage(save_rel)
 
         rclone_mod.rclone_pull_games_json()
@@ -715,7 +767,10 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
                     else f"Cloud push failed: {msg_push}", ok_push))
 
         if sys.platform != "win32":
-            ok_lnk, msg_lnk = make_save_symlink(game_id, aid, save_rel)
+            if linux_native:
+                ok_lnk, msg_lnk = make_save_symlink_native(game_id, save_real.resolve())
+            else:
+                ok_lnk, msg_lnk = make_save_symlink(game_id, aid, save_rel)
             log.append((f"Save symlink {'created' if ok_lnk else 'failed: ' + msg_lnk}",
                         ok_lnk))
 
@@ -729,6 +784,7 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
                 game_name=game_name,
                 savesync_bin=SAVESYNC_BIN,
                 game_cfg=new_cfg,
+                linux_native=linux_native,
             )
             log.append((f"Steam launch options {'updated' if ok3 else 'failed: ' + msg3}", ok3))
             if ok3:
@@ -742,6 +798,7 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
                 real_exe=str(exe_real),
                 start_dir=ns_entry["start_dir"],
                 game_cfg=new_cfg,
+                linux_native=linux_native,
             )
             log.append((f"Steam shortcut {'updated' if ok3 else 'failed: ' + msg3}", ok3))
             if ok3:

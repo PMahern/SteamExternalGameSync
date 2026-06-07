@@ -700,8 +700,11 @@ def cmd_update_shortcuts(args):
             if not ns_entry:
                 results.append((game_cfg["name"], False, "shortcut not found in Steam"))
                 continue
+            _linux_native = mc.get("platform") == "linux_native"
             if mc.get("platform") == "windows":
                 exe_real = Path(mc["exe_path"])
+            elif _linux_native:
+                exe_real = Path(ns_entry.get("exe", "").strip().strip('"'))
             else:
                 exe_real = resolve_exe_path(mc["app_id"], game_cfg["exe_path"])
             ok, msg = update_shortcut_launch(
@@ -712,6 +715,7 @@ def cmd_update_shortcuts(args):
                 real_exe=str(exe_real),
                 start_dir=ns_entry["start_dir"],
                 game_cfg=game_cfg,
+                linux_native=_linux_native,
             )
             results.append((game_cfg["name"], ok, "updated" if ok else msg))
 

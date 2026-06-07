@@ -2,6 +2,28 @@ import { useCallback, useEffect, useState } from 'react';
 import { DialogButton, Focusable } from '@decky/ui';
 import { callable } from '@decky/api';
 
+// Safe wrappers in case dynamic module finders return undefined after a Steam update
+const SafeDialogButton: React.FC<{ disabled?: boolean; onClick?: () => void; style?: React.CSSProperties; children?: React.ReactNode }> =
+  (DialogButton as any) ??
+  (({ disabled, onClick, style, children }) => (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        padding: '6px 12px', background: disabled ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.12)',
+        border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px',
+        color: disabled ? '#888' : '#fff', cursor: disabled ? 'default' : 'pointer',
+        fontSize: '13px', ...style,
+      }}
+    >
+      {children}
+    </button>
+  ));
+
+const SafeFocusable: React.FC<{ style?: React.CSSProperties; children?: React.ReactNode; [key: string]: any }> =
+  (Focusable as any) ??
+  (({ style, children }) => <div style={style}>{children}</div>);
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 interface GameInfo {
@@ -208,18 +230,18 @@ export default function SyncPage() {
       )}
 
       {/* Sync All */}
-      <Focusable style={{ marginBottom: '16px' }}>
-        <DialogButton
+      <SafeFocusable style={{ marginBottom: '16px' }}>
+        <SafeDialogButton
           disabled={anySyncing || !loaded}
           onClick={handleSyncAll}
           style={{ width: '100%' }}
         >
           {isSyncingAll ? 'Syncing...' : 'Sync All'}
-        </DialogButton>
-      </Focusable>
+        </SafeDialogButton>
+      </SafeFocusable>
 
       {/* Game list */}
-      <Focusable style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <SafeFocusable style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
         {loaded && gameStates.length === 0 && (
           <div style={{ color: '#8899a6', padding: '8px 0' }}>
             No games assigned to this machine.
@@ -263,37 +285,37 @@ export default function SyncPage() {
               {/* Right: action buttons */}
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
                 {!isConflict && !isSyncingAll && (
-                  <DialogButton
+                  <SafeDialogButton
                     disabled={isThisSyncing || anySyncing}
                     onClick={() => handleSyncOne(g.id)}
                     style={{ width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }}
                   >
                     {isThisSyncing ? '...' : 'Sync'}
-                  </DialogButton>
+                  </SafeDialogButton>
                 )}
                 {isConflict && (
                   <>
-                    <DialogButton
+                    <SafeDialogButton
                       disabled={isResolving}
                       onClick={() => handleResolve(g.id, 'local')}
                       style={{ width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }}
                     >
                       Local
-                    </DialogButton>
-                    <DialogButton
+                    </SafeDialogButton>
+                    <SafeDialogButton
                       disabled={isResolving}
                       onClick={() => handleResolve(g.id, 'remote')}
                       style={{ width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }}
                     >
                       Cloud
-                    </DialogButton>
+                    </SafeDialogButton>
                   </>
                 )}
               </div>
             </div>
           );
         })}
-      </Focusable>
+      </SafeFocusable>
     </div>
   );
 }

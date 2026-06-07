@@ -17,7 +17,7 @@ from config import (
     find_steam_root_linux, find_steam_root_windows,
 )
 from games import game_id_from_name
-from machine_config import get_local_config
+from machine_config import get_local_config, set_local_config
 
 
 # ── Proton / symlink helpers ──────────────────────────────────────────────────
@@ -41,6 +41,29 @@ def find_compatdata(app_id: str) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def is_proton_game(app_id: str) -> bool:
+    """Return True if the Steam game runs through Proton rather than natively on Linux."""
+    steam_root = find_steam_root_linux()
+    if steam_root:
+        config_path = steam_root / "config" / "config.vdf"
+        if config_path.exists():
+            try:
+                import vdf as vdflib
+                with open(config_path, encoding="utf-8", errors="replace") as f:
+                    data = vdflib.load(f)
+                compat_map = (data
+                    .get("InstallConfigStore", data.get("installconfigstore", {}))
+                    .get("Software", {})
+                    .get("Valve", {})
+                    .get("Steam", {})
+                    .get("CompatToolMapping", {}))
+                if compat_map.get(str(app_id), {}).get("name"):
+                    return True
+            except Exception:
+                pass
+    return find_compatdata(str(app_id)) is not None
 
 
 def proton_drive_c(steam_app_id: str) -> Path:
@@ -118,6 +141,30 @@ def make_save_symlink(game_id: str, steam_app_id: str,
     link.symlink_to(real_path)
     log(f"Symlink: {link} -> {real_path}")
     return True, f"linked to {real_path}"
+
+
+def make_save_symlink_native(game_id: str, abs_save_path: Path) -> tuple[bool, str]:
+    """Create symlink: SYNC_ROOT/saves/<game_id>/ -> abs_save_path (native Linux game)."""
+    link = saves_link_path(game_id)
+
+    abs_save_path.mkdir(parents=True, exist_ok=True)
+    link.parent.mkdir(parents=True, exist_ok=True)
+
+    if link.exists() and not link.is_symlink():
+        backup = BACKUP_ROOT / game_id / datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(str(link), str(backup))
+        shutil.rmtree(str(link))
+        log(f"Backed up existing data at {link} to {backup}")
+
+    if link.is_symlink():
+        if link.resolve() == abs_save_path.resolve():
+            return True, "symlink already correct"
+        link.unlink()
+
+    link.symlink_to(abs_save_path)
+    log(f"Symlink: {link} -> {abs_save_path}")
+    return True, f"linked to {abs_save_path}"
 
 
 # ── Steam shortcuts.vdf ───────────────────────────────────────────────────────
@@ -475,8 +522,15 @@ def _write_launch_wrapper_win(game_name: str, savesync_bat: str,
 def _write_launch_wrapper(game_name: str, savesync_bin: str,
                           game_id: str = "", game_exe_win: str = "",
                           disc_image: str = "",
-                          prelauncher_linux: str = "") -> str:
-    """Write a per-game shell wrapper for the pre-launcher.exe flow."""
+                          prelauncher_linux: str = "",
+                          prelauncher_native: str = "") -> str:
+    """Write a per-game shell wrapper.
+
+    prelauncher_linux  — path to pre-launcher.exe inside the Proton prefix
+                         (for Proton games; injected into the %command% verb chain)
+    prelauncher_native — path to the native Linux pre-launcher binary
+                         (for native Linux games/shortcuts; called as pre/post)
+    """
     wrapper_dir = Path.home() / ".local" / "share" / "externalgamesync" / "wrappers"
     wrapper_dir.mkdir(parents=True, exist_ok=True)
 
@@ -492,6 +546,7 @@ GAME_ID="{game_id}"
 GAME_EXE_WIN="{game_exe_win}"
 DISC_IMAGE="{disc_image}"
 PRELAUNCHER="{prelauncher_linux}"
+PRELAUNCHER_NATIVE="{prelauncher_native}"
 
 # IPC directory inside the Proton prefix (accessible from both Linux and Wine)
 _ipc_dir() {{
@@ -662,27 +717,57 @@ fi
 # Start push handler in background — waits for PUSH_START_FILE.
 _push_handler &
 
-# Run the launch command.  For both non-Steam shortcuts and native Steam games,
-# this is pre-launcher.exe via Proton.  Pre-launcher handles sync UI, launches
-# the game via run_wait, and signals push when done — the wrapper just waits.
-"${{_LAUNCH_CMD[@]}}"
-LAUNCH_RC=$?
-"$SAVESYNC" log "[wrapper] launch exited rc=$LAUNCH_RC native_prelauncher=$_NATIVE_PRELAUNCHER"
+# === Launch flow ===
+# FLOW 1 — Proton pre-launcher.exe (native Steam Proton or Proton shortcut):
+#   pre-launcher.exe is spliced into the Proton verb chain; it handles sync UI,
+#   game launch, and push signalling internally. Wrapper just waits.
+# FLOW 2 — Linux native pre-launcher (native Linux game or non-Steam shortcut):
+#   pre-launcher binary runs as two sub-commands: "pre" (sync UI, blocks until
+#   done or cancelled) then "post" (push UI, writes PUSH_START_FILE internally).
+# FLOW 3 — No pre-launcher: background handlers run silently, no UI.
+LAUNCH_RC=0
+_CANCELLED=0
 
-# Log pre-launcher diagnostics if available
-_diag_file="$IPC_DIR/../ExternalGameSync/egs_diag.txt"
+if [ "$_NATIVE_PRELAUNCHER" -eq 1 ]; then
+    # FLOW 1: Proton pre-launcher.exe embedded in command chain
+    "${{_LAUNCH_CMD[@]}}"
+    LAUNCH_RC=$?
+    "$SAVESYNC" log "[wrapper] Proton launch exited rc=$LAUNCH_RC"
+    # Fallback: ensure push runs if pre-launcher.exe crashed without signalling
+    [ ! -f "$CANCEL_FILE" ] && touch "$PUSH_START_FILE"
+elif [ -n "$PRELAUNCHER_NATIVE" ] && [ -f "$PRELAUNCHER_NATIVE" ]; then
+    # FLOW 2: Linux native pre-launcher — pre phase (blocks)
+    "$PRELAUNCHER_NATIVE" pre
+    PL_RC=$?
+    if [ $PL_RC -ne 0 ]; then
+        "$SAVESYNC" log "[wrapper] pre-launcher cancelled launch"
+        touch "$CANCEL_FILE"
+        _CANCELLED=1
+    else
+        # Launch the game directly
+        "${{_LAUNCH_CMD[@]}}"
+        LAUNCH_RC=$?
+        "$SAVESYNC" log "[wrapper] game exited rc=$LAUNCH_RC"
+        # Post phase: shows push UI and writes PUSH_START_FILE; _push_handler does the actual push
+        "$PRELAUNCHER_NATIVE" post
+        "$SAVESYNC" log "[wrapper] post pre-launcher done"
+    fi
+else
+    # FLOW 3: No pre-launcher — launch directly and signal push
+    "${{_LAUNCH_CMD[@]}}"
+    LAUNCH_RC=$?
+    "$SAVESYNC" log "[wrapper] launch exited rc=$LAUNCH_RC"
+    [ ! -f "$CANCEL_FILE" ] && touch "$PUSH_START_FILE"
+fi
+
+# Log pre-launcher diagnostics if available (written to IPC_DIR/egs_diag.txt)
+_diag_file="$IPC_DIR/egs_diag.txt"
 if [ -f "$_diag_file" ]; then
     "$SAVESYNC" log "[wrapper] egs_diag.txt found:"
     while IFS= read -r _line; do
         "$SAVESYNC" log "[diag] $_line"
     done < "$_diag_file"
-else
-    "$SAVESYNC" log "[wrapper] egs_diag.txt NOT found (pre-launcher may not have run)"
 fi
-
-# Fallback: if pre-launcher.exe exited without writing the push signal (e.g. crash),
-# ensure _push_handler still runs the push.
-[ ! -f "$CANCEL_FILE" ] && touch "$PUSH_START_FILE"
 
 # Wait for both background handlers to finish
 wait 2>/dev/null || true
@@ -694,6 +779,7 @@ if [ -n "$_disc_mount" ]; then
     [ -n "$STEAM_COMPAT_DATA_PATH" ] && rm -f "$STEAM_COMPAT_DATA_PATH/pfx/dosdevices/d:"
 fi
 
+[ "$_CANCELLED" -eq 1 ] && exit 1
 exit $LAUNCH_RC
 """
 
@@ -703,9 +789,27 @@ exit $LAUNCH_RC
     return str(wrapper_path)
 
 
+def _ensure_prelauncher_native() -> str:
+    """Ensure the Linux pre-launcher binary is installed; return its path (may not exist on failure)."""
+    dest_dir = Path.home() / ".local" / "share" / "externalgamesync"
+    dest = dest_dir / "pre-launcher"
+    # Prefer the binary shipped with the repo (same dir as this file → pre-launcher/pre-launcher)
+    repo_bin = Path(__file__).parent / "pre-launcher" / "pre-launcher"
+    if repo_bin.exists():
+        if not dest.exists() or repo_bin.stat().st_mtime > dest.stat().st_mtime:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(repo_bin, dest)
+            dest.chmod(0o755)
+            log(f"Installed pre-launcher → {dest}")
+    elif not dest.exists():
+        log_err(f"pre-launcher not found at {repo_bin} or {dest} — run pre-launcher/build.sh first")
+    return str(dest)
+
+
 def _install_prelauncher(app_id: str) -> str | None:
-    """Copy pre-launcher.exe from the app dir into the game's Proton prefix."""
-    src = Path.home() / ".local" / "share" / "externalgamesync" / "pre-launcher.exe"
+    """Copy pre-launcher.exe and SDL2 DLLs into the game's Proton prefix."""
+    app_dir = Path.home() / ".local" / "share" / "externalgamesync"
+    src = app_dir / "pre-launcher.exe"
     if not src.exists():
         log_err(f"pre-launcher.exe not found at {src} — run pre-launcher/build.sh first")
         return None
@@ -720,6 +824,16 @@ def _install_prelauncher(app_id: str) -> str | None:
     dst_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst_dir / "pre-launcher.exe")
     log(f"Installed pre-launcher.exe → {dst_dir / 'pre-launcher.exe'}")
+
+    # Copy SDL2 DLLs — required at runtime by the SDL2-based pre-launcher.exe under Wine.
+    # build.sh places these alongside pre-launcher.exe in the app dir.
+    for dll in ("SDL2.dll", "SDL2_ttf.dll"):
+        dll_src = app_dir / dll
+        if dll_src.exists():
+            shutil.copy2(dll_src, dst_dir / dll)
+            log(f"Installed {dll} → {dst_dir / dll}")
+        else:
+            log_err(f"{dll} not found at {dll_src} — pre-launcher may fail to start under Wine")
     return r"C:\users\steamuser\AppData\Local\ExternalGameSync\pre-launcher.exe"
 
 
@@ -902,6 +1016,7 @@ def update_shortcut_launch(
     start_dir: str,
     game_cfg: dict = None,
     disc_image_override: str | None = None,
+    linux_native: bool = False,
 ) -> tuple[bool, str]:
     """Rewrite a non-Steam shortcut to wrap launch with save syncing."""
     try:
@@ -936,20 +1051,50 @@ def update_shortcut_launch(
             exe_path     = (game_cfg or {}).get("exe_path", "")
             game_exe_win = "C:\\" + _to_drive_c_rel(exe_path).replace("/", "\\") if exe_path else ""
 
-            app_id        = mc.get("app_id") if mc else None
-            prelauncher_win = None
-            if app_id:
-                prelauncher_win = _install_prelauncher(str(app_id))
+            if linux_native:
+                prelauncher_win    = None
+                prelauncher_native = _ensure_prelauncher_native()
+            else:
+                app_id = mc.get("app_id") if mc else None
+                prelauncher_win    = _install_prelauncher(str(app_id)) if app_id else None
+                prelauncher_native = ""
 
             wrapper_path = _write_launch_wrapper(
                 game_name, savesync_bin,
                 game_id=game_id,
                 game_exe_win=game_exe_win,
                 disc_image=disc_image,
+                prelauncher_native=prelauncher_native,
             )
 
             env_vars    = (game_cfg or {}).get("env_vars", "").strip()
-            launch_opts = f'"{wrapper_path}" %command%'
+
+            if linux_native:
+                # For native Linux non-Steam shortcuts, %command% expands to only the
+                # Exe path — the original LaunchOptions args (e.g. "run org.foo.App"
+                # for Flatpak) are separate and would be lost if we just use %command%.
+                # Prefer saved args from machine config (stable across re-runs), then
+                # fall back to reading the entry (only works before we first overwrite it).
+                _game_id = (game_cfg or {}).get("id", "")
+                _mc = get_local_config(_game_id) if _game_id else mc
+                _orig_args = (_mc or {}).get("shortcut_args", "")
+                if not _orig_args:
+                    for _k in ("LaunchOptions", "launchoptions", "Launchoptions"):
+                        _v = entry.get(_k, "").strip()
+                        if _v and "%command%" not in _v:
+                            _orig_args = _v
+                            break
+                    if _orig_args and _game_id and _mc is not None:
+                        _mc["shortcut_args"] = _orig_args
+                        set_local_config(_game_id, _mc)
+                        log(f"Saved shortcut_args for {_game_id}: {_orig_args!r}")
+                if _orig_args:
+                    launch_opts = f'"{wrapper_path}" %command% {_orig_args}'
+                else:
+                    launch_opts = f'"{wrapper_path}" %command%'
+            else:
+                launch_opts = f'"{wrapper_path}" %command%'
+
             if env_vars:
                 launch_opts = f'{env_vars} {launch_opts}'
 
@@ -957,7 +1102,8 @@ def update_shortcut_launch(
                 set_key("Exe", f'"{prelauncher_win}"')
                 set_key("StartDir", f'"{str(Path(prelauncher_win).parent)}"')
             elif real_exe:
-                log("pre-launcher.exe not installed — shortcut Exe left as real game exe")
+                if not linux_native:
+                    log("pre-launcher.exe not installed — shortcut Exe left as real game exe")
                 set_key("Exe", f'"{real_exe}"')
                 set_key("StartDir", f'"{str(Path(real_exe).parent)}"')
             set_key("LaunchOptions", launch_opts)
@@ -1143,6 +1289,7 @@ def update_native_game_launch(
     savesync_bin: str,
     game_cfg: dict = None,
     disc_image_override: str | None = None,
+    linux_native: bool = False,
 ) -> tuple[bool, str]:
     """Write launch wrapper and set localconfig.vdf LaunchOptions for a native Steam game.
     Unlike update_shortcut_launch, this never touches shortcuts.vdf and skips pre-launcher."""
@@ -1163,16 +1310,22 @@ def update_native_game_launch(
         game_id      = (game_cfg or {}).get("id", game_id_from_name(game_name))
         exe_path     = (game_cfg or {}).get("exe_path", "")
         game_exe_win = "C:\\" + _to_drive_c_rel(exe_path).replace("/", "\\") if exe_path else ""
-        _install_prelauncher(str(app_id))  # copies binary into prefix
-        compatdata = find_compatdata(str(app_id))
-        prelauncher_linux = str(
-            compatdata / "pfx" / "drive_c" / "users" / "steamuser"
-            / "AppData" / "Local" / "ExternalGameSync" / "pre-launcher.exe"
-        ) if compatdata else ""
+        if linux_native:
+            prelauncher_linux  = ""
+            prelauncher_native = _ensure_prelauncher_native()
+        else:
+            _install_prelauncher(str(app_id))  # copies binary into prefix
+            compatdata = find_compatdata(str(app_id))
+            prelauncher_linux  = str(
+                compatdata / "pfx" / "drive_c" / "users" / "steamuser"
+                / "AppData" / "Local" / "ExternalGameSync" / "pre-launcher.exe"
+            ) if compatdata else ""
+            prelauncher_native = ""
         wrapper_path = _write_launch_wrapper(
             game_name, savesync_bin,
             game_id=game_id, game_exe_win=game_exe_win, disc_image=disc_image,
             prelauncher_linux=prelauncher_linux,
+            prelauncher_native=prelauncher_native,
         )
         env_vars    = (game_cfg or {}).get("env_vars", "").strip()
         launch_opts = f'"{wrapper_path}" %command%'

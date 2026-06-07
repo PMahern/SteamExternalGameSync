@@ -241,7 +241,20 @@ def normalize_path_for_storage(path: str | Path) -> str:
     No-op on non-Windows or if no known prefix matches.
     """
     if sys.platform != "win32":
-        return str(path)
+        p = str(path)
+        h = str(Path.home())
+        xdg_subs = [
+            (str(Path.home() / ".local" / "share"), "<xdgData>"),
+            (str(Path.home() / ".config"),          "<xdgConfig>"),
+            (str(Path.home() / ".cache"),           "<xdgCache>"),
+            (h,                                      "<home>"),
+        ]
+        for real, var in sorted(xdg_subs, key=lambda x: len(x[0]), reverse=True):
+            if p.startswith(real + "/"):
+                return var + "/" + p[len(real) + 1:]
+            if p == real:
+                return var
+        return p
     p = str(path).replace("\\", "/")
 
     ad   = os.environ.get("APPDATA",      "").replace("\\", "/")
@@ -305,6 +318,39 @@ def normalize_path_for_storage(path: str | Path) -> str:
             return var
 
     return p
+
+
+def get_linux_save_paths(entry: dict) -> list[str]:
+    """Resolve save paths for native Linux games using XDG variables."""
+    import glob as _glob
+    h = Path.home()
+    vm = {
+        "<home>":      str(h),
+        "<xdgData>":   str(h / ".local" / "share"),
+        "<xdgConfig>": str(h / ".config"),
+        "<xdgCache>":  str(h / ".cache"),
+    }
+    steam_root = _steam_root()
+    if steam_root:
+        vm["<root>"] = steam_root
+    results = []
+    for path_str, fe in entry.get("files", {}).items():
+        if not _is_save(fe):
+            continue
+        if not _os_ok(fe, "linux"):
+            continue
+        if _needs_install_var(path_str):
+            continue
+        partial = path_str
+        for k, v in vm.items():
+            partial = partial.replace(k, v)
+        partial = partial.replace("/", os.sep)
+        if "<storeUserId>" in partial:
+            pattern = partial.replace("<storeUserId>", "*")
+            results.extend(sorted(_glob.glob(pattern)))
+        elif "<" not in partial:
+            results.append(partial)
+    return results
 
 
 def get_fixed_save_paths(entry: dict, app_id: str | None) -> list[str]:
