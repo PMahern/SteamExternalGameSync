@@ -215,8 +215,16 @@ echo "OK pre-launcher.exe ($(du -h pre-launcher.exe | cut -f1))"
 cp pre-launcher.exe "$DEST/pre-launcher.exe"
 echo "Installed -> $DEST/pre-launcher.exe"
 
-# Copy SDL2 DLLs if available (needed alongside pre-launcher.exe on Windows)
+# Copy SDL2 DLLs (stripped) to DEST and back into pre-launcher/ for git
 _dll_dir="$(dirname "$WIN_LIBDIR")/bin"
 for DLL in "$_dll_dir/SDL2.dll" "$_dll_dir/SDL2_ttf.dll"; do
-    [ -f "$DLL" ] && cp "$DLL" "$DEST/" && echo "Installed -> $DEST/$(basename "$DLL")"
+    if [ -f "$DLL" ]; then
+        _stripped="$(mktemp)"
+        cp "$DLL" "$_stripped"
+        x86_64-w64-mingw32-strip "$_stripped" 2>/dev/null || true
+        cp "$_stripped" "$DEST/$(basename "$DLL")"
+        cp "$_stripped" "$(dirname "$0")/$(basename "$DLL")"
+        rm -f "$_stripped"
+        echo "Installed -> $DEST/$(basename "$DLL")"
+    fi
 done

@@ -677,7 +677,7 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
 
     def _work():
         log = []
-        if native_steam:
+        if native_steam or linux_native:
             shutdown_steam_sync()
         if sys.platform == "win32":
             if native_steam:
@@ -697,6 +697,10 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
             save_rel = ludusavi.normalize_path_for_storage(save_real.resolve())
             mc = {"platform": "linux_native", "app_id": aid,
                   "save_path": str(save_real.resolve())}
+            if ns_entry:
+                _orig_exe = ns_entry.get("exe", "").strip().strip('"')
+                if _orig_exe:
+                    mc["shortcut_exe"] = _orig_exe
         else:
             aid     = app_id
             drive_c = proton_drive_c(aid)
@@ -795,7 +799,7 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
                 shortcut_index=ns_entry["index"],
                 game_name=game_name,
                 savesync_bin=SAVESYNC_BIN,
-                real_exe=str(exe_real),
+                real_exe=str(exe_real) if exe_real else "",
                 start_dir=ns_entry["start_dir"],
                 game_cfg=new_cfg,
                 linux_native=linux_native,

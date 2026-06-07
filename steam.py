@@ -1073,10 +1073,15 @@ def update_shortcut_launch(
                 # For native Linux non-Steam shortcuts, %command% expands to only the
                 # Exe path — the original LaunchOptions args (e.g. "run org.foo.App"
                 # for Flatpak) are separate and would be lost if we just use %command%.
-                # Prefer saved args from machine config (stable across re-runs), then
+                # Similarly, the original Exe (e.g. /usr/bin/flatpak) must be preserved
+                # so future update-shortcuts calls don't read back the wrapper path.
+                # Prefer saved values from machine config (stable across re-runs), then
                 # fall back to reading the entry (only works before we first overwrite it).
                 _game_id = (game_cfg or {}).get("id", "")
                 _mc = get_local_config(_game_id) if _game_id else mc
+                _mc_dirty = False
+                _wrapper_dir = str(Path.home() / ".local" / "share" / "externalgamesync" / "wrappers")
+
                 _orig_args = (_mc or {}).get("shortcut_args", "")
                 if not _orig_args:
                     for _k in ("LaunchOptions", "launchoptions", "Launchoptions"):
@@ -1086,8 +1091,24 @@ def update_shortcut_launch(
                             break
                     if _orig_args and _game_id and _mc is not None:
                         _mc["shortcut_args"] = _orig_args
-                        set_local_config(_game_id, _mc)
+                        _mc_dirty = True
                         log(f"Saved shortcut_args for {_game_id}: {_orig_args!r}")
+
+                _orig_exe = (_mc or {}).get("shortcut_exe", "")
+                if not _orig_exe and _game_id and _mc is not None:
+                    for _k in ("Exe", "exe", "EXE"):
+                        _v = entry.get(_k, "").strip().strip('"')
+                        if _v and not _v.startswith(_wrapper_dir):
+                            _orig_exe = _v
+                            break
+                    if _orig_exe:
+                        _mc["shortcut_exe"] = _orig_exe
+                        _mc_dirty = True
+                        log(f"Saved shortcut_exe for {_game_id}: {_orig_exe!r}")
+
+                if _mc_dirty and _mc is not None:
+                    set_local_config(_game_id, _mc)
+
                 if _orig_args:
                     launch_opts = f'"{wrapper_path}" %command% {_orig_args}'
                 else:
