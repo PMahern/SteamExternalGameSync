@@ -1,218 +1,48 @@
 /*
- * ExternalGameSync Pre-Launcher — fullscreen styled dialog with controller support
+ * ExternalGameSync Pre-Launcher — SDL2/SDL_ttf, cross-platform (Linux + Windows/Wine)
  *
- * All dimensions scale with screen resolution so it's legible at 4K.
- * Controller input via XInput (loaded dynamically — no SDK needed).
+ * Linux build:
+ *   gcc -O2 -Wall -o pre-launcher pre-launcher.c \
+ *       $(sdl2-config --cflags --libs) -lSDL2_ttf
  *
- * Build (mingw-w64 cross-compile from Linux — requires stb_image.h in same dir):
- *   x86_64-w64-mingw32-gcc -O2 -mwindows -Wall -static-libgcc -o pre-launcher.exe pre-launcher.c -lgdi32 -lmsimg32
+ * Windows cross-compile (from Linux, requires mingw-w64 SDL2/SDL2_ttf packages):
+ *   x86_64-w64-mingw32-gcc -O2 -mwindows -Wall -static-libgcc \
+ *       -o pre-launcher.exe pre-launcher.c \
+ *       $(pkg-config --cflags --libs sdl2 SDL2_ttf | sed 's/-I/-I/g') \
+ *       -DSDL_MAIN_HANDLED
  *
- * Build (MSVC Developer PowerShell):
- *   cl /O2 /W3 pre-launcher.c user32.lib gdi32.lib msimg32.lib /Fe:pre-launcher.exe /link /subsystem:windows
+ * Linux invocation (by the bash wrapper):
+ *   pre-launcher pre   → pre-game phases; exits 0=ok, 1=cancelled
+ *   pre-launcher post  → post-game phases (write push signal, show pushing/pushed)
  *
- * IPC files (all inside %TEMP%):
- *   egs_status.txt     - STATUS / GAME / GAME_EXE written by wrapper.sh before launch
- *   egs_ready.txt      - written by Linux handler when sync phase is complete
- *   egs_choice.txt     - written here after user picks conflict resolution
- *   egs_cancelled.txt  - written here when user cancels launch
- *   egs_push_start.txt - written here after game exits to trigger Linux-side push
- *   egs_push_done.txt  - written by Linux handler when push is complete
+ * Windows invocation (splice into Proton %command%):
+ *   pre-launcher.exe   → full flow: pre-game, run_wait(game_exe), post-game
+ *
+ * IPC files (all in IPC_DIR):
+ *   egs_status.txt     written by wrapper.sh before launch
+ *   egs_ready.txt      written by sync handler when pre-launch pull is done
+ *   egs_choice.txt     written here after user resolves conflict
+ *   egs_cancelled.txt  written here when user cancels
+ *   egs_push_start.txt written here to trigger post-game push
+ *   egs_push_done.txt  written by sync handler when push is done
  */
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <tlhelp32.h>
+#define SDL_MAIN_HANDLED
+#endif
+
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include "icon_data.h"
-
-/* ── Diagnostic log (%TEMP%\egs_diag.txt, readable from Linux via IPC dir) ── */
-
-static FILE *g_diag = NULL;
-
-static void diag_open(void)
-{
-    char path[MAX_PATH * 2];
-
-    /* First choice: next to the exe — guaranteed writable since we installed it there */
-    char exe_path[MAX_PATH] = {0};
-    if (GetModuleFileNameA(NULL, exe_path, MAX_PATH)) {
-        char *sep = NULL;
-        for (char *p = exe_path; *p; p++) if (*p == '\\' || *p == '/') sep = p;
-        if (sep) {
-            *(sep + 1) = 0;
-            snprintf(path, sizeof(path), "%segs_diag.txt", exe_path);
-            g_diag = fopen(path, "w");
-        }
-    }
-
-    /* Second choice: %TEMP% */
-    if (!g_diag) {
-        char tmp[MAX_PATH];
-        ExpandEnvironmentStringsA("%TEMP%", tmp, MAX_PATH);
-        snprintf(path, sizeof(path), "%s\\egs_diag.txt", tmp);
-        g_diag = fopen(path, "w");
-    }
-
-    if (g_diag) {
-        fprintf(g_diag, "=== ExternalGameSync Pre-Launcher Diagnostics ===\n");
-        fprintf(g_diag, "diag file: %s\n", path);
-        fprintf(g_diag, "exe path:  %s\n", exe_path);
-        fflush(g_diag);
-    }
-}
-
-static void diag(const char *fmt, ...)
-{
-    if (!g_diag) return;
-    va_list ap; va_start(ap, fmt);
-    vfprintf(g_diag, fmt, ap);
-    va_end(ap);
-    fputc('\n', g_diag);
-    fflush(g_diag);
-}
-
-static void diag_env(const char *name)
-{
-    char val[1024] = {0};
-    if (GetEnvironmentVariableA(name, val, sizeof(val)))
-        diag("  env %s=%s", name, val);
-    else
-        diag("  env %s=(not set, err=%lu)", name, GetLastError());
-}
-
-static void diag_drives(void)
-{
-    DWORD mask = GetLogicalDrives();
-    diag("logical drives mask: 0x%lx", mask);
-    for (int i = 0; i < 26; i++) {
-        if (!(mask & (1u << i))) continue;
-        char root[4] = { (char)('A' + i), ':', '\\', 0 };
-        UINT type = GetDriveTypeA(root);
-        const char *tname;
-        switch (type) {
-        case DRIVE_REMOVABLE:    tname = "removable";  break;
-        case DRIVE_FIXED:        tname = "fixed";       break;
-        case DRIVE_REMOTE:       tname = "remote";      break;
-        case DRIVE_CDROM:        tname = "cdrom";       break;
-        case DRIVE_RAMDISK:      tname = "ramdisk";     break;
-        case DRIVE_NO_ROOT_DIR:  tname = "no_root_dir"; break;
-        default:                 tname = "unknown";     break;
-        }
-        char vol[256] = {0}, fs[64] = {0};
-        GetVolumeInformationA(root, vol, sizeof(vol), NULL, NULL, NULL, fs, sizeof(fs));
-        diag("  drive %s type=%-12s label=\"%s\" fs=%s", root, tname, vol, fs);
-    }
-}
-
-static void diag_exe(const char *exe)
-{
-    if (!exe || !exe[0]) { diag("game_exe: (empty)"); return; }
-    diag("game_exe: %s", exe);
-    DWORD attr = GetFileAttributesA(exe);
-    if (attr == INVALID_FILE_ATTRIBUTES) {
-        diag("  -> NOT FOUND (GetFileAttributes error=%lu)", GetLastError());
-    } else {
-        diag("  -> exists, attr=0x%lx%s", attr,
-             (attr & FILE_ATTRIBUTE_DIRECTORY) ? " [DIR]" : " [file]");
-    }
-    /* Also try the parent directory */
-    char dir[MAX_PATH * 2];
-    strncpy(dir, exe, sizeof(dir) - 1);
-    dir[sizeof(dir) - 1] = 0;
-    char *sep = NULL;
-    for (char *p = dir; *p; p++) if (*p == '\\' || *p == '/') sep = p;
-    if (sep) {
-        *sep = 0;
-        DWORD da = GetFileAttributesA(dir);
-        diag("  parent dir %s: %s (attr=0x%lx)",
-             dir,
-             da == INVALID_FILE_ATTRIBUTES ? "NOT FOUND" : "exists",
-             da);
-    }
-}
-
-/* ── Runtime scaling (all sizes in "base 1080p pixels", scaled at startup) ─ */
-
-static int  g_sw = 1920, g_sh = 1080;  /* window/screen dimensions used for rendering */
-static int  g_scale_n = 1, g_scale_d = 1; /* scale as integer fraction n/d */
-static BOOL g_windowed = FALSE; /* TRUE: small centered dialog; FALSE: fullscreen */
-
-/* Scale a base-1080p value */
-static int S(int base) { return base * g_scale_n / g_scale_d; }
-
-/* Scale a base-1080p font point size */
-static int SF(int pt) { return S(pt); }
-
-/* fullscreen_hint comes from FULLSCREEN= in the status file, written by the
- * wrapper before launching this process.  Default (no status file) is windowed. */
-static void init_scale(int fullscreen_hint)
-{
-    g_windowed = !fullscreen_hint;
-    if (g_windowed) {
-        g_sw = 800; g_sh = 600;
-        g_scale_n = 1; g_scale_d = 1;
-    } else {
-        g_sw = GetSystemMetrics(SM_CXSCREEN);
-        g_sh = GetSystemMetrics(SM_CYSCREEN);
-        /* Use height to drive scale; maintain integer ratio for crisp fonts */
-        g_scale_n = g_sh;
-        g_scale_d = 1080;
-    }
-}
-
-/* ── Colours ─────────────────────────────────────────────────────────────── */
-
-#define C_BG      RGB(0x0e,0x0e,0x1a)
-#define C_PANEL   RGB(0x16,0x16,0x26)
-#define C_ACCENT  RGB(0x40,0x40,0xd0)
-#define C_DIM     RGB(0x70,0x70,0x90)
-#define C_TEXT    RGB(0xd8,0xd8,0xe8)
-#define C_WHITE   RGB(0xff,0xff,0xff)
-#define C_GREEN   RGB(0x18,0x80,0x48)
-#define C_RED     RGB(0xa8,0x24,0x24)
-#define C_GOLD    RGB(0xa0,0x7c,0x00)
-#define C_BLUE    RGB(0x1c,0x54,0xb0)
-#define C_SEL_BDR RGB(0x60,0x60,0xff)
-
-/* ── XInput ──────────────────────────────────────────────────────────────── */
-
-#define XI_LEFT  0x0004
-#define XI_RIGHT 0x0008
-#define XI_START 0x0010
-#define XI_A     0x1000
-#define XI_B     0x2000
-#define XI_Y     0x8000
-
-typedef struct {
-    DWORD pkt;
-    struct { WORD btn; BYTE lt, rt; SHORT lx, ly, rx, ry; } pad;
-} XISTATE;
-typedef DWORD (WINAPI *PFN_XI)(DWORD, XISTATE *);
-
-static PFN_XI g_xi      = NULL;
-static WORD   g_xi_prev = 0;
-
-static void xi_init(void)
-{
-    const char *dlls[] = {"xinput1_4.dll","xinput1_3.dll","xinput9_1_0.dll",NULL};
-    for (int i = 0; dlls[i]; i++) {
-        HMODULE h = LoadLibraryA(dlls[i]);
-        if (h) { g_xi = (PFN_XI)GetProcAddress(h, "XInputGetState"); if (g_xi) break; }
-    }
-}
-
-static WORD xi_poll(void)
-{
-    if (!g_xi) return 0;
-    XISTATE s = {0}; WORD cur = 0;
-    for (DWORD i = 0; i < 4; i++) if (g_xi(i, &s) == 0) cur |= s.pad.btn;
-    WORD p = cur & ~g_xi_prev; g_xi_prev = cur; return p;
-}
-
-/* ── Icon (stb_image — no GDI+ needed, works in Wine) ───────────────────── */
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -224,148 +54,881 @@ static WORD xi_poll(void)
 #include "stb_image.h"
 #pragma GCC diagnostic pop
 
-static HBITMAP g_icon_bmp = NULL;
-static int     g_icon_w   = 0, g_icon_h = 0;
+#include "icon_data.h"
 
-static void icon_load(void)
+/* ── Diagnostic log ────────────────────────────────────────────────────────── */
+
+static FILE *g_diag = NULL;
+
+static void diag_open(void)
 {
-    int w, h, ch;
-    unsigned char *px = stbi_load_from_memory(icon_png, (int)icon_png_len,
-                                               &w, &h, &ch, 4);
-    if (!px) return;
-
-    BITMAPINFO bi = {0};
-    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth       = w;
-    bi.bmiHeader.biHeight      = -h; /* top-down */
-    bi.bmiHeader.biPlanes      = 1;
-    bi.bmiHeader.biBitCount    = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    void *bits = NULL;
-    HDC dc = GetDC(NULL);
-    g_icon_bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-    ReleaseDC(NULL, dc);
-
-    if (g_icon_bmp && bits) {
-        /* Convert RGBA (stb_image) to pre-multiplied BGRA required by AlphaBlend */
-        const unsigned char *s = px;
-        unsigned char *d = (unsigned char *)bits;
-        for (int i = 0; i < w * h; i++, s += 4, d += 4) {
-            unsigned a = s[3];
-            d[0] = (unsigned char)(s[2] * a / 255); /* B */
-            d[1] = (unsigned char)(s[1] * a / 255); /* G */
-            d[2] = (unsigned char)(s[0] * a / 255); /* R */
-            d[3] = (unsigned char)a;
-        }
-        g_icon_w = w; g_icon_h = h;
+    char path[4096];
+#ifdef _WIN32
+    char exe_path[MAX_PATH] = {0};
+    if (GetModuleFileNameA(NULL, exe_path, MAX_PATH)) {
+        char *sep = strrchr(exe_path, '\\');
+        if (!sep) sep = strrchr(exe_path, '/');
+        if (sep) { *(sep+1) = 0; snprintf(path, sizeof(path), "%segs_diag.txt", exe_path); g_diag = fopen(path, "w"); }
     }
-
-    stbi_image_free(px);
+    if (!g_diag) {
+        char tmp[MAX_PATH]; ExpandEnvironmentStringsA("%TEMP%", tmp, MAX_PATH);
+        snprintf(path, sizeof(path), "%s\\egs_diag.txt", tmp); g_diag = fopen(path, "w");
+    }
+#else
+    snprintf(path, sizeof(path), "/tmp/externalgamesync/egs_diag.txt");
+    g_diag = fopen(path, "w");
+#endif
+    if (g_diag) { fprintf(g_diag, "=== ExternalGameSync Pre-Launcher (SDL2) ===\n"); fflush(g_diag); }
 }
 
-static void icon_free(void)
+static void diag(const char *fmt, ...)
 {
-    if (g_icon_bmp) { DeleteObject(g_icon_bmp); g_icon_bmp = NULL; }
-    g_icon_w = g_icon_h = 0;
+    if (!g_diag) return;
+    va_list ap; va_start(ap, fmt); vfprintf(g_diag, fmt, ap); va_end(ap);
+    fputc('\n', g_diag); fflush(g_diag);
 }
 
-/* ── IPC helpers ─────────────────────────────────────────────────────────── */
+/* ── IPC paths ─────────────────────────────────────────────────────────────── */
 
-#define MAX_VAL   4096
-#define MAX_PATH2 (MAX_PATH * 2)
+static char g_ipc_dir[4096] = {0};
 
-typedef struct { char status[64]; char game[512]; char game_exe[MAX_VAL]; char last_status[64]; int fullscreen; } EgsStatus;
-
-/* File that ready_exists() / wait_ready() polls — set before each run_dialog call */
-static char g_ready_poll[MAX_PATH2] = {0};
-
-static void ipc_path(const char *name, char *out, DWORD sz)
+static void ipc_init(void)
 {
-    /* Use USERPROFILE\AppData\Local\Temp — matches the path the bash wrapper
-     * hardcodes via pfx/drive_c/users/steamuser/AppData/Local/Temp.
-     * Wine's %TEMP% resolves to the shorter C:\users\steamuser\Temp which
-     * is a different directory. */
+#ifdef _WIN32
     char profile[MAX_PATH] = {0};
-    if (GetEnvironmentVariableA("USERPROFILE", profile, MAX_PATH) && profile[0]) {
-        snprintf(out, sz, "%s\\AppData\\Local\\Temp\\%s", profile, name);
-    } else {
-        /* Fallback for non-Wine environments */
-        char tmp[MAX_PATH];
-        ExpandEnvironmentStringsA("%TEMP%", tmp, MAX_PATH);
-        snprintf(out, sz, "%s\\%s", tmp, name);
+    if (GetEnvironmentVariableA("USERPROFILE", profile, MAX_PATH) && profile[0])
+        snprintf(g_ipc_dir, sizeof(g_ipc_dir), "%s\\AppData\\Local\\Temp", profile);
+    else {
+        char tmp[MAX_PATH]; ExpandEnvironmentStringsA("%TEMP%", tmp, MAX_PATH);
+        snprintf(g_ipc_dir, sizeof(g_ipc_dir), "%s", tmp);
     }
+#else
+    const char *compat = getenv("STEAM_COMPAT_DATA_PATH");
+    if (compat && compat[0])
+        snprintf(g_ipc_dir, sizeof(g_ipc_dir),
+                 "%s/pfx/drive_c/users/steamuser/AppData/Local/Temp", compat);
+    else {
+        snprintf(g_ipc_dir, sizeof(g_ipc_dir), "/tmp/externalgamesync");
+        mkdir(g_ipc_dir, 0700);
+    }
+#endif
+    diag("ipc_dir: %s", g_ipc_dir);
 }
 
-static void set_poll_file(const char *name)
+static void ipc_path(const char *name, char *out, size_t sz)
 {
-    ipc_path(name, g_ready_poll, sizeof(g_ready_poll));
+#ifdef _WIN32
+    snprintf(out, sz, "%s\\%s", g_ipc_dir, name);
+#else
+    snprintf(out, sz, "%s/%s", g_ipc_dir, name);
+#endif
 }
 
-static void delete_poll_file(void)
+static int file_exists(const char *path)
 {
-    if (g_ready_poll[0]) DeleteFileA(g_ready_poll);
-    g_ready_poll[0] = 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    fclose(f); return 1;
 }
+
+static void file_write(const char *path, const char *content)
+{
+    FILE *f = fopen(path, "w");
+    if (f) { fputs(content, f); fclose(f); }
+}
+
+static void file_delete(const char *path)
+{
+#ifdef _WIN32
+    DeleteFileA(path);
+#else
+    remove(path);
+#endif
+}
+
+/* ── Status file ───────────────────────────────────────────────────────────── */
+
+typedef struct {
+    char status[64];
+    char game[512];
+    char game_exe[4096];
+    char last_status[64];
+    int  fullscreen;
+} EgsStatus;
 
 static void read_status(EgsStatus *s)
 {
-    char path[MAX_PATH2]; ipc_path("egs_status.txt", path, sizeof(path));
+    char path[4096]; ipc_path("egs_status.txt", path, sizeof(path));
     FILE *f = fopen(path, "r"); if (!f) return;
-    char line[MAX_VAL + 64];
+    char line[4160];
     while (fgets(line, sizeof(line), f)) {
-        line[strcspn(line,"\r\n")] = 0;
-        char *eq = strchr(line,'='); if (!eq) continue; *eq = 0;
+        line[strcspn(line, "\r\n")] = 0;
+        char *eq = strchr(line, '='); if (!eq) continue; *eq = 0;
         char *k = line, *v = eq + 1;
-        if (!strcmp(k,"STATUS"))      strncpy(s->status,     v,sizeof(s->status)     -1);
-        if (!strcmp(k,"GAME"))        strncpy(s->game,       v,sizeof(s->game)       -1);
-        if (!strcmp(k,"GAME_EXE"))    strncpy(s->game_exe,   v,sizeof(s->game_exe)   -1);
-        if (!strcmp(k,"LAST_STATUS")) strncpy(s->last_status,v,sizeof(s->last_status)-1);
-        if (!strcmp(k,"FULLSCREEN"))  s->fullscreen = (v[0] == '1');
+        if (!strcmp(k, "STATUS"))      strncpy(s->status,      v, sizeof(s->status)      - 1);
+        if (!strcmp(k, "GAME"))        strncpy(s->game,        v, sizeof(s->game)        - 1);
+        if (!strcmp(k, "GAME_EXE"))    strncpy(s->game_exe,    v, sizeof(s->game_exe)    - 1);
+        if (!strcmp(k, "LAST_STATUS")) strncpy(s->last_status, v, sizeof(s->last_status) - 1);
+        if (!strcmp(k, "FULLSCREEN"))  s->fullscreen = (v[0] == '1');
     }
     fclose(f);
 }
 
 static void write_choice(const char *c)
 {
-    char path[MAX_PATH2]; ipc_path("egs_choice.txt", path, sizeof(path));
-    FILE *f = fopen(path,"w"); if (f) { fputs(c,f); fclose(f); }
+    char path[4096]; ipc_path("egs_choice.txt", path, sizeof(path));
+    file_write(path, c);
 }
 
-static void write_cancel_file(void)
+static void write_cancel(void)
 {
-    char path[MAX_PATH2]; ipc_path("egs_cancelled.txt", path, sizeof(path));
-    FILE *f = fopen(path,"w"); if (f) { fclose(f); }
+    char path[4096]; ipc_path("egs_cancelled.txt", path, sizeof(path));
+    file_write(path, "");
 }
 
 static void write_push_signal(void)
 {
-    char path[MAX_PATH2]; ipc_path("egs_push_start.txt", path, sizeof(path));
-    FILE *f = fopen(path,"w"); if (f) { fputs("push",f); fclose(f); }
+    char path[4096]; ipc_path("egs_push_start.txt", path, sizeof(path));
+    file_write(path, "push");
 }
 
-static int ready_exists(void)
+/* Poll file used by the ready-check timer */
+static char g_poll_file[4096] = {0};
+
+static void set_poll_file(const char *name)
 {
-    if (!g_ready_poll[0]) return 0;
-    return GetFileAttributesA(g_ready_poll) != INVALID_FILE_ATTRIBUTES;
+    ipc_path(name, g_poll_file, sizeof(g_poll_file));
 }
 
-/* Returns TRUE if any running process has its exe inside dir (prefix match). */
+static void clear_poll_file(void)
+{
+    if (g_poll_file[0]) { file_delete(g_poll_file); g_poll_file[0] = 0; }
+}
+
+static int poll_file_exists(void) { return g_poll_file[0] && file_exists(g_poll_file); }
+
+/* ── Scaling ───────────────────────────────────────────────────────────────── */
+
+static int g_sw = 800, g_sh = 600;
+static int g_scale_n = 1, g_scale_d = 1;
+static int g_windowed = 1;
+
+static int S(int base) { return base * g_scale_n / g_scale_d; }
+
+static void init_scale(int fullscreen_hint)
+{
+    g_windowed = !fullscreen_hint;
+    if (g_windowed) {
+        g_sw = 800; g_sh = 600;
+        g_scale_n = 1; g_scale_d = 1;
+    } else {
+        SDL_DisplayMode dm;
+        if (SDL_GetCurrentDisplayMode(0, &dm) == 0) { g_sw = dm.w; g_sh = dm.h; }
+        else { g_sw = 1920; g_sh = 1080; }
+        g_scale_n = g_sh; g_scale_d = 1080;
+    }
+    diag("scale: %dx%d  n/d=%d/%d  windowed=%d", g_sw, g_sh, g_scale_n, g_scale_d, g_windowed);
+}
+
+/* ── Colours ───────────────────────────────────────────────────────────────── */
+
+#define COL(r,g,b) ((SDL_Color){r,g,b,255})
+#define COLA(r,g,b,a) ((SDL_Color){r,g,b,a})
+
+static const SDL_Color C_BG      = COL(0x0e,0x0e,0x1a);
+static const SDL_Color C_PANEL   = COL(0x16,0x16,0x26);
+static const SDL_Color C_ACCENT  = COL(0x40,0x40,0xd0);
+static const SDL_Color C_DIV     = COL(0x28,0x28,0x44);
+static const SDL_Color C_DIM     = COL(0x70,0x70,0x90);
+static const SDL_Color C_TEXT    = COL(0xd8,0xd8,0xe8);
+static const SDL_Color C_WHITE   = COL(0xff,0xff,0xff);
+static const SDL_Color C_GREEN   = COL(0x18,0x80,0x48);
+static const SDL_Color C_RED     = COL(0xa8,0x24,0x24);
+static const SDL_Color C_GOLD    = COL(0xa0,0x7c,0x00);
+static const SDL_Color C_BLUE    = COL(0x1c,0x54,0xb0);
+static const SDL_Color C_SEL_BDR = COL(0x60,0x60,0xff);
+
+/* ── SDL renderer globals ──────────────────────────────────────────────────── */
+
+static SDL_Window   *g_win  = NULL;
+static SDL_Renderer *g_ren  = NULL;
+static SDL_Texture  *g_icon = NULL;
+static int           g_icon_w = 0, g_icon_h = 0;
+
+/* ── Fonts ─────────────────────────────────────────────────────────────────── */
+
+static TTF_Font *g_fnt_heading = NULL; /* 26pt bold  */
+static TTF_Font *g_fnt_body    = NULL; /* 18pt       */
+static TTF_Font *g_fnt_label   = NULL; /* 13pt bold  */
+static TTF_Font *g_fnt_hint    = NULL; /* 14pt       */
+static TTF_Font *g_fnt_btn     = NULL; /* 18pt bold  */
+
+static const char *font_search_paths[] = {
+#ifdef _WIN32
+    "C:\\Windows\\Fonts\\segoeui.ttf",
+    "C:\\Windows\\Fonts\\arial.ttf",
+#else
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    "/usr/share/fonts/gnu-free/FreeSans.ttf",
+#endif
+    NULL
+};
+static const char *font_search_paths_bold[] = {
+#ifdef _WIN32
+    "C:\\Windows\\Fonts\\segoeuib.ttf",
+    "C:\\Windows\\Fonts\\arialbd.ttf",
+#else
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    "/usr/share/fonts/gnu-free/FreeSansBold.ttf",
+#endif
+    NULL
+};
+
+static const char *find_font(int bold)
+{
+    const char **paths = bold ? font_search_paths_bold : font_search_paths;
+    for (int i = 0; paths[i]; i++)
+        if (file_exists(paths[i])) return paths[i];
+    /* fallback: try the other weight */
+    const char **alt = bold ? font_search_paths : font_search_paths_bold;
+    for (int i = 0; alt[i]; i++)
+        if (file_exists(alt[i])) return alt[i];
+    return NULL;
+}
+
+static int fonts_load(void)
+{
+    const char *reg  = find_font(0);
+    const char *bold = find_font(1);
+    if (!reg && !bold) { diag("no font found"); return 0; }
+    if (!bold) bold = reg;
+    if (!reg)  reg  = bold;
+    diag("font regular: %s", reg);
+    diag("font bold:    %s", bold);
+    g_fnt_heading = TTF_OpenFont(bold, S(26));
+    g_fnt_body    = TTF_OpenFont(reg,  S(18));
+    g_fnt_label   = TTF_OpenFont(bold, S(13));
+    g_fnt_hint    = TTF_OpenFont(reg,  S(14));
+    g_fnt_btn     = TTF_OpenFont(bold, S(18));
+    return g_fnt_heading && g_fnt_body && g_fnt_btn;
+}
+
+static void fonts_free(void)
+{
+    if (g_fnt_heading) { TTF_CloseFont(g_fnt_heading); g_fnt_heading = NULL; }
+    if (g_fnt_body)    { TTF_CloseFont(g_fnt_body);    g_fnt_body    = NULL; }
+    if (g_fnt_label)   { TTF_CloseFont(g_fnt_label);   g_fnt_label   = NULL; }
+    if (g_fnt_hint)    { TTF_CloseFont(g_fnt_hint);    g_fnt_hint    = NULL; }
+    if (g_fnt_btn)     { TTF_CloseFont(g_fnt_btn);     g_fnt_btn     = NULL; }
+}
+
+/* ── Icon ──────────────────────────────────────────────────────────────────── */
+
+static void icon_load(void)
+{
+    int w, h, ch;
+    unsigned char *px = stbi_load_from_memory(icon_png, (int)icon_png_len, &w, &h, &ch, 4);
+    if (!px) { diag("icon: stbi failed"); return; }
+    SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(px, w, h, 32, w*4,
+                                                           SDL_PIXELFORMAT_RGBA32);
+    if (!surf) { stbi_image_free(px); return; }
+    g_icon = SDL_CreateTextureFromSurface(g_ren, surf);
+    SDL_SetTextureBlendMode(g_icon, SDL_BLENDMODE_BLEND);
+    SDL_FreeSurface(surf);
+    stbi_image_free(px);
+    g_icon_w = w; g_icon_h = h;
+    diag("icon: %dx%d", w, h);
+}
+
+static void icon_free(void)
+{
+    if (g_icon) { SDL_DestroyTexture(g_icon); g_icon = NULL; }
+}
+
+/* ── Drawing helpers ───────────────────────────────────────────────────────── */
+
+static void set_color(SDL_Color c)
+{
+    SDL_SetRenderDrawColor(g_ren, c.r, c.g, c.b, c.a);
+}
+
+static void fill_rect(int x, int y, int w, int h, SDL_Color c)
+{
+    set_color(c);
+    SDL_Rect r = {x, y, w, h};
+    SDL_RenderFillRect(g_ren, &r);
+}
+
+static void draw_rect_border(int x, int y, int w, int h, SDL_Color c, int bw)
+{
+    set_color(c);
+    for (int i = 0; i < bw; i++) {
+        SDL_Rect r = {x+i, y+i, w-i*2, h-i*2};
+        SDL_RenderDrawRect(g_ren, &r);
+    }
+}
+
+/* Render UTF-8 text into a texture; caller frees the texture. */
+static SDL_Texture *make_text(TTF_Font *fnt, const char *text, SDL_Color col)
+{
+    if (!fnt || !text || !text[0]) return NULL;
+    SDL_Surface *s = TTF_RenderUTF8_Blended(fnt, text, col);
+    if (!s) return NULL;
+    SDL_Texture *t = SDL_CreateTextureFromSurface(g_ren, s);
+    SDL_FreeSurface(s);
+    return t;
+}
+
+/* Render word-wrapped text; max_w is in pixels. */
+static SDL_Texture *make_text_wrapped(TTF_Font *fnt, const char *text, SDL_Color col, int max_w)
+{
+    if (!fnt || !text || !text[0]) return NULL;
+    SDL_Surface *s = TTF_RenderUTF8_Blended_Wrapped(fnt, text, col, (Uint32)max_w);
+    if (!s) return NULL;
+    SDL_Texture *t = SDL_CreateTextureFromSurface(g_ren, s);
+    SDL_FreeSurface(s);
+    return t;
+}
+
+static void blit(SDL_Texture *t, int x, int y)
+{
+    if (!t) return;
+    int w, h; SDL_QueryTexture(t, NULL, NULL, &w, &h);
+    SDL_Rect dst = {x, y, w, h};
+    SDL_RenderCopy(g_ren, t, NULL, &dst);
+}
+
+/* ── Phase state machine ───────────────────────────────────────────────────── */
+
+typedef enum {
+    PH_SYNCING_PRE,
+    PH_CONFLICT,
+    PH_SYNCING_RESOLVE,
+    PH_NO_CONNECTION,
+    PH_SYNCED_OK,
+    PH_PUSHING,
+    PH_PUSHED,
+} Phase;
+
+static Phase g_phase;
+
+/* Button: label, fill color, result value, screen rect */
+typedef struct { char label[80]; SDL_Color color; int result; SDL_Rect r; } Btn;
+
+static Btn  g_btns[3];
+static int  g_nbtns  = 0;
+static int  g_sel    = 0;
+static int  g_done   = -1;   /* -1 = running; 0 = ok; 1 = cancelled */
+static int  g_syncing = 0;   /* no interactive buttons shown */
+static char g_heading[128];
+static char g_body[512];
+
+static int phase_dismissable(void)
+{
+    return g_phase == PH_SYNCED_OK || g_phase == PH_PUSHED;
+}
+
+static Uint32 g_dismiss_at = 0; /* SDL_GetTicks() target for auto-dismiss, 0 = no timer */
+static int    g_dirty      = 1; /* render requested */
+static int    g_quit       = 0;
+
+/* Panel geometry (computed once in render, used for mouse hit-testing) */
+static int g_px, g_py, g_pw, g_ph;
+
+/* ── Dialog content setup ──────────────────────────────────────────────────── */
+
+static void setup_syncing(void)
+{
+    strncpy(g_heading, "Syncing saves...", sizeof(g_heading)-1);
+    strncpy(g_body,
+        "Syncing your saves with cloud storage.\n\n"
+        "The game will launch automatically when the sync completes.",
+        sizeof(g_body)-1);
+    g_nbtns = 0; g_syncing = 1; g_dirty = 1;
+}
+
+static void setup_synced(void)
+{
+    strncpy(g_heading, "Saves synced!", sizeof(g_heading)-1);
+    strncpy(g_body, "Saves are up to date. Launching game...", sizeof(g_body)-1);
+    g_nbtns = 0; g_syncing = 1; g_dirty = 1;
+}
+
+static void setup_conflict(const char *game)
+{
+    snprintf(g_heading, sizeof(g_heading), "%s - Save Conflict", game[0] ? game : "Game");
+    snprintf(g_body, sizeof(g_body),
+        "Saves have changed on cloud storage since your last sync.\n\n"
+        "Both sides will be backed up before any changes are made.");
+    g_nbtns = 3; g_syncing = 0;
+    strncpy(g_btns[0].label, "(A)  Keep Cloud",    79); g_btns[0].color = C_GREEN; g_btns[0].result = 1;
+    strncpy(g_btns[1].label, "(B)  Keep Local",    79); g_btns[1].color = C_RED;   g_btns[1].result = 2;
+    strncpy(g_btns[2].label, "(Y)  Cancel Launch", 79); g_btns[2].color = C_GOLD;  g_btns[2].result = 0;
+    g_sel = 0; g_dirty = 1;
+}
+
+static void setup_no_connection(const char *game, int server_ahead)
+{
+    snprintf(g_heading, sizeof(g_heading), "%s - No Connection", game[0] ? game : "Game");
+    if (server_ahead)
+        snprintf(g_body, sizeof(g_body),
+            "Could not reach cloud storage before launching.\n\n"
+            "WARNING: The server had unsynced changes last time it was reachable.\n"
+            "You may be playing with outdated saves.\n\n"
+            "Continue launching anyway?");
+    else
+        snprintf(g_body, sizeof(g_body),
+            "Could not reach cloud storage before launching.\n\n"
+            "Your local saves are safe but won't be updated from the server.\n"
+            "Continue launching anyway?");
+    g_nbtns = 2; g_syncing = 0;
+    strncpy(g_btns[0].label, "(A)  Continue Anyway", 79); g_btns[0].color = C_BLUE; g_btns[0].result = 1;
+    strncpy(g_btns[1].label, "(B)  Cancel Launch",   79); g_btns[1].color = C_RED;  g_btns[1].result = 0;
+    g_sel = 0; g_dirty = 1;
+}
+
+static void setup_pushing(void)
+{
+    strncpy(g_heading, "Saving game...", sizeof(g_heading)-1);
+    strncpy(g_body, "Pushing your saves to cloud storage.", sizeof(g_body)-1);
+    g_nbtns = 0; g_syncing = 1; g_dirty = 1;
+}
+
+static void setup_pushed(void)
+{
+    strncpy(g_heading, "Saves uploaded!", sizeof(g_heading)-1);
+    strncpy(g_body, "See you next time.", sizeof(g_body)-1);
+    g_nbtns = 0; g_syncing = 1; g_dirty = 1;
+}
+
+/* ── Phase advance ─────────────────────────────────────────────────────────── */
+
+static void advance(int result)
+{
+    g_dismiss_at = 0;
+    switch (g_phase) {
+
+    case PH_SYNCING_PRE: {
+        clear_poll_file();
+        EgsStatus ns = {0}; read_status(&ns);
+        if (!strcmp(ns.status, "conflict")) {
+            g_phase = PH_CONFLICT;
+            setup_conflict(ns.game);
+        } else {
+            g_phase = PH_SYNCED_OK;
+            setup_synced();
+            g_dismiss_at = SDL_GetTicks() + 2000;
+        }
+        return;
+    }
+
+    case PH_CONFLICT:
+        if (result == 0) { write_cancel(); g_done = 1; g_quit = 1; return; }
+        write_choice(result == 1 ? "remote" : "local");
+        g_phase = PH_SYNCING_RESOLVE;
+        set_poll_file("egs_ready.txt");
+        setup_syncing();
+        return;
+
+    case PH_SYNCING_RESOLVE:
+        clear_poll_file();
+        g_phase = PH_SYNCED_OK;
+        setup_synced();
+        g_dismiss_at = SDL_GetTicks() + 2000;
+        return;
+
+    case PH_NO_CONNECTION:
+        if (result == 0) { write_cancel(); g_done = 1; }
+        else              g_done = 0;
+        g_quit = 1;
+        return;
+
+    case PH_SYNCED_OK:
+        g_done = 0; g_quit = 1;
+        return;
+
+    case PH_PUSHING:
+        clear_poll_file();
+        g_phase = PH_PUSHED;
+        setup_pushed();
+        g_dismiss_at = SDL_GetTicks() + 3000;
+        return;
+
+    case PH_PUSHED:
+        g_done = 0; g_quit = 1;
+        return;
+    }
+}
+
+/* ── Render ────────────────────────────────────────────────────────────────── */
+
+static void render(void)
+{
+    int pad     = S(48);
+    int btn_h   = S(72);
+    int btn_gap = S(16);
+    int acc_h   = S(4);
+
+    /* Background */
+    set_color(C_BG);
+    SDL_RenderClear(g_ren);
+
+    /* Panel */
+    g_pw = g_windowed ? g_sw : g_sw * 7 / 10;
+    g_ph = g_windowed ? g_sh : g_sh * 6 / 10;
+    g_px = (g_sw - g_pw) / 2;
+    g_py = (g_sh - g_ph) / 2;
+
+    fill_rect(g_px, g_py, g_pw, g_ph, C_PANEL);
+    fill_rect(g_px, g_py, g_pw, acc_h, C_ACCENT);
+
+    /* Icon (watermark, centered, half panel size, at 20% opacity) */
+    if (g_icon) {
+        int isz = (g_pw < g_ph ? g_pw : g_ph) / 2;
+        SDL_Rect dst = { g_px + (g_pw - isz)/2, g_py + (g_ph - isz)/2, isz, isz };
+        SDL_SetTextureAlphaMod(g_icon, 51); /* 20% */
+        SDL_RenderCopy(g_ren, g_icon, NULL, &dst);
+        SDL_SetTextureAlphaMod(g_icon, 255);
+    }
+
+    /* "EXTERNALGAMESYNC" label */
+    {
+        SDL_Texture *t = make_text(g_fnt_label ? g_fnt_label : g_fnt_body,
+                                   "EXTERNALGAMESYNC", C_DIM);
+        blit(t, g_px + pad, g_py + S(12));
+        SDL_DestroyTexture(t);
+    }
+
+    /* Heading */
+    {
+        SDL_Texture *t = make_text(g_fnt_heading, g_heading, C_WHITE);
+        blit(t, g_px + pad, g_py + S(44));
+        SDL_DestroyTexture(t);
+    }
+
+    /* Divider */
+    fill_rect(g_px + pad, g_py + S(106), g_pw - pad*2, S(1), C_DIV);
+
+    /* Body text */
+    {
+        int body_bottom = g_syncing
+            ? g_py + g_ph - pad
+            : g_py + g_ph - btn_h - pad*2 - S(8);
+        int body_h = body_bottom - (g_py + S(114));
+        SDL_Texture *t = make_text_wrapped(g_fnt_body, g_body, C_TEXT, g_pw - pad*2);
+        if (t) {
+            int tw, th; SDL_QueryTexture(t, NULL, NULL, &tw, &th);
+            if (th > body_h) th = body_h; /* clip — SDL_RenderCopy handles this */
+            SDL_Rect src = {0, 0, tw, th};
+            SDL_Rect dst = {g_px + pad, g_py + S(114), tw, th};
+            SDL_RenderCopy(g_ren, t, &src, &dst);
+            SDL_DestroyTexture(t);
+        }
+    }
+
+    /* Buttons */
+    if (!g_syncing && g_nbtns > 0) {
+        int bw  = (g_pw - pad*2 - btn_gap*(g_nbtns-1)) / g_nbtns;
+        int by  = g_py + g_ph - btn_h - pad;
+        int bx0 = g_px + pad;
+
+        for (int i = 0; i < g_nbtns; i++) {
+            g_btns[i].r.x = bx0 + i*(bw+btn_gap);
+            g_btns[i].r.y = by;
+            g_btns[i].r.w = bw;
+            g_btns[i].r.h = btn_h;
+
+            fill_rect(g_btns[i].r.x, g_btns[i].r.y, bw, btn_h, g_btns[i].color);
+            SDL_Color bdr = (i == g_sel) ? C_SEL_BDR : g_btns[i].color;
+            int bdr_w = (i == g_sel) ? S(3) : S(1);
+            draw_rect_border(g_btns[i].r.x, g_btns[i].r.y, bw, btn_h, bdr, bdr_w);
+
+            SDL_Texture *lt = make_text(g_fnt_btn, g_btns[i].label, C_WHITE);
+            if (lt) {
+                int lw, lh; SDL_QueryTexture(lt, NULL, NULL, &lw, &lh);
+                blit(lt, g_btns[i].r.x + (bw - lw)/2,
+                         g_btns[i].r.y + (btn_h - lh)/2);
+                SDL_DestroyTexture(lt);
+            }
+        }
+
+        /* Navigation hint below panel */
+        {
+            SDL_Texture *ht = make_text(g_fnt_hint ? g_fnt_hint : g_fnt_body,
+                "Press button directly  \xc2\xb7  D-Pad/Arrows to navigate  \xc2\xb7  Start/Enter to confirm  \xc2\xb7  Esc to cancel",
+                C_DIM);
+            if (ht) {
+                int hw, hh; SDL_QueryTexture(ht, NULL, NULL, &hw, &hh);
+                blit(ht, g_px + (g_pw - hw)/2, g_py + g_ph + S(12));
+                SDL_DestroyTexture(ht);
+            }
+        }
+    }
+
+    SDL_RenderPresent(g_ren);
+    g_dirty = 0;
+}
+
+/* ── Controller ────────────────────────────────────────────────────────────── */
+
+/* Open all connected controllers at startup, re-open on hotplug */
+#define MAX_CONTROLLERS 4
+static SDL_GameController *g_controllers[MAX_CONTROLLERS];
+
+static void controllers_open_all(void)
+{
+    for (int i = 0; i < SDL_NumJoysticks(); i++)
+        if (SDL_IsGameController(i) && i < MAX_CONTROLLERS)
+            if (!g_controllers[i])
+                g_controllers[i] = SDL_GameControllerOpen(i);
+}
+
+static void controllers_close_all(void)
+{
+    for (int i = 0; i < MAX_CONTROLLERS; i++)
+        if (g_controllers[i]) { SDL_GameControllerClose(g_controllers[i]); g_controllers[i] = NULL; }
+}
+
+static void set_sel(int idx)
+{
+    if (g_nbtns <= 0) return;
+    g_sel = (idx + g_nbtns) % g_nbtns;
+    g_dirty = 1;
+}
+
+static void handle_confirm(void)
+{
+    if (phase_dismissable()) { advance(0); return; }
+    if (!g_syncing && g_nbtns > 0) advance(g_btns[g_sel].result);
+}
+
+static void handle_cancel(void)
+{
+    if (phase_dismissable()) { advance(0); return; }
+    if (g_syncing) return;
+    int cancel_idx = g_nbtns > 2 ? 2 : g_nbtns - 1;
+    advance(g_btns[cancel_idx].result);
+}
+
+static void handle_controller_button(SDL_GameControllerButton btn)
+{
+    if (g_syncing) {
+        if (phase_dismissable() &&
+            (btn == SDL_CONTROLLER_BUTTON_A || btn == SDL_CONTROLLER_BUTTON_B ||
+             btn == SDL_CONTROLLER_BUTTON_Y || btn == SDL_CONTROLLER_BUTTON_START))
+            advance(0);
+        return;
+    }
+    switch (btn) {
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  set_sel(g_sel - 1); break;
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: set_sel(g_sel + 1); break;
+    case SDL_CONTROLLER_BUTTON_START:      handle_confirm(); break;
+    case SDL_CONTROLLER_BUTTON_A:          if (g_nbtns > 0) advance(g_btns[0].result); break;
+    case SDL_CONTROLLER_BUTTON_B:          if (g_nbtns > 1) advance(g_btns[1].result); break;
+    case SDL_CONTROLLER_BUTTON_Y:          if (g_nbtns > 2) advance(g_btns[2].result); break;
+    default: break;
+    }
+}
+
+/* ── Event handling ────────────────────────────────────────────────────────── */
+
+static void handle_event(const SDL_Event *ev)
+{
+    switch (ev->type) {
+    case SDL_QUIT:
+        write_cancel(); g_done = 1; g_quit = 1;
+        break;
+
+    case SDL_KEYDOWN:
+        switch (ev->key.keysym.sym) {
+        case SDLK_LEFT: case SDLK_UP:    if (!g_syncing) set_sel(g_sel - 1); break;
+        case SDLK_RIGHT: case SDLK_DOWN: if (!g_syncing) set_sel(g_sel + 1); break;
+        case SDLK_RETURN: case SDLK_SPACE: handle_confirm(); break;
+        case SDLK_ESCAPE: handle_cancel(); break;
+        }
+        break;
+
+    case SDL_MOUSEMOTION:
+        if (!g_syncing) {
+            int x = ev->motion.x, y = ev->motion.y;
+            for (int i = 0; i < g_nbtns; i++)
+                if (x >= g_btns[i].r.x && x < g_btns[i].r.x + g_btns[i].r.w &&
+                    y >= g_btns[i].r.y && y < g_btns[i].r.y + g_btns[i].r.h)
+                    set_sel(i);
+        }
+        break;
+
+    case SDL_MOUSEBUTTONDOWN:
+        if (ev->button.button == SDL_BUTTON_LEFT) {
+            if (g_syncing) { if (phase_dismissable()) advance(0); break; }
+            int x = ev->button.x, y = ev->button.y;
+            for (int i = 0; i < g_nbtns; i++)
+                if (x >= g_btns[i].r.x && x < g_btns[i].r.x + g_btns[i].r.w &&
+                    y >= g_btns[i].r.y && y < g_btns[i].r.y + g_btns[i].r.h)
+                    advance(g_btns[i].result);
+        }
+        break;
+
+    case SDL_CONTROLLERBUTTONDOWN:
+        handle_controller_button((SDL_GameControllerButton)ev->cbutton.button);
+        break;
+
+    case SDL_CONTROLLERDEVICEADDED:
+        controllers_open_all();
+        break;
+
+    case SDL_WINDOWEVENT:
+        if (ev->window.event == SDL_WINDOWEVENT_EXPOSED) g_dirty = 1;
+        break;
+    }
+}
+
+/* ── Main event loop ───────────────────────────────────────────────────────── */
+
+static void run_loop(void)
+{
+    g_quit = 0; g_dirty = 1;
+    while (!g_quit) {
+        SDL_Event ev;
+        /* 100ms timeout — IPC polling rate */
+        if (SDL_WaitEventTimeout(&ev, 100))
+            handle_event(&ev);
+        /* drain any queued events */
+        while (SDL_PollEvent(&ev))
+            handle_event(&ev);
+
+        /* IPC poll */
+        if (g_poll_file[0] && poll_file_exists())
+            advance(0);
+
+        /* Auto-dismiss */
+        if (g_dismiss_at && SDL_GetTicks() >= g_dismiss_at)
+            advance(0);
+
+        if (g_dirty && !g_quit)
+            render();
+    }
+}
+
+/* ── Window management ─────────────────────────────────────────────────────── */
+
+static int window_open(void)
+{
+    if (g_win) return 1;
+
+    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_INPUT_FOCUS;
+    if (!g_windowed) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+
+    int wx = SDL_WINDOWPOS_CENTERED, wy = SDL_WINDOWPOS_CENTERED;
+    g_win = SDL_CreateWindow("ExternalGameSync", wx, wy, g_sw, g_sh, flags);
+    if (!g_win) { diag("SDL_CreateWindow failed: %s", SDL_GetError()); return 0; }
+
+    g_ren = SDL_CreateRenderer(g_win, -1,
+                               SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!g_ren) {
+        g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_SOFTWARE);
+        if (!g_ren) { diag("SDL_CreateRenderer failed: %s", SDL_GetError()); return 0; }
+    }
+
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    SDL_RaiseWindow(g_win);
+    diag("window opened: %dx%d", g_sw, g_sh);
+    return 1;
+}
+
+static void window_close(void)
+{
+    icon_free();
+    if (g_ren) { SDL_DestroyRenderer(g_ren); g_ren = NULL; }
+    if (g_win) { SDL_DestroyWindow(g_win);   g_win = NULL; }
+}
+
+/* ── Pre-game sequence ─────────────────────────────────────────────────────── */
+/* Returns 0 = ok to launch, 1 = cancelled */
+
+static int run_pre_game(const EgsStatus *s0)
+{
+    EgsStatus s; memcpy(&s, s0, sizeof s);
+    int was_syncing = !strcmp(s.status, "syncing");
+
+    /* Fast path: ready file already written before we started */
+    char ready[4096]; ipc_path("egs_ready.txt", ready, sizeof(ready));
+    if (file_exists(ready)) {
+        file_delete(ready);
+        memset(&s, 0, sizeof s); read_status(&s);
+        was_syncing = 1;
+    }
+
+    if (!strcmp(s.status, "syncing")) {
+        g_phase = PH_SYNCING_PRE;
+        set_poll_file("egs_ready.txt");
+        setup_syncing();
+    } else if (!strcmp(s.status, "conflict")) {
+        g_phase = PH_CONFLICT;
+        setup_conflict(s.game);
+    } else if (!strcmp(s.status, "no_connection")) {
+        int sa = (!strcmp(s.last_status, "cloud_ahead") || !strcmp(s.last_status, "conflict"));
+        g_phase = PH_NO_CONNECTION;
+        setup_no_connection(s.game, sa);
+    } else if (was_syncing) {
+        g_phase = PH_SYNCED_OK;
+        setup_synced();
+        g_dismiss_at = SDL_GetTicks() + 2000;
+    } else {
+        return 0; /* nothing to show */
+    }
+
+    if (!window_open()) return 0;
+    if (!fonts_load()) diag("warning: fonts not loaded — text will not render");
+    icon_load();
+    run_loop();
+    return (g_done == 1) ? 1 : 0;
+}
+
+/* ── Post-game sequence ────────────────────────────────────────────────────── */
+
+static void run_post_game(void)
+{
+    write_push_signal();
+    g_phase = PH_PUSHING;
+    g_done = -1;
+    set_poll_file("egs_push_done.txt");
+    setup_pushing();
+    if (!window_open()) return;
+    if (!fonts_load()) diag("warning: fonts not loaded");
+    icon_load();
+    run_loop();
+}
+
+/* ── Windows-only: launch and wait for the game process ───────────────────── */
+
+#ifdef _WIN32
+
 static BOOL any_process_in_dir(const char *dir)
 {
     size_t dirlen = strlen(dir);
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return FALSE;
-
     PROCESSENTRY32 pe = {sizeof(pe)};
     BOOL found = FALSE;
     if (Process32First(snap, &pe)) {
         do {
-            if (pe.th32ProcessID <= 4) continue; /* skip idle/system */
+            if (pe.th32ProcessID <= 4) continue;
             HANDLE ph = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
             if (!ph) continue;
-            char path[MAX_PATH2] = {0};
-            DWORD sz = sizeof(path);
+            char path[8192] = {0}; DWORD sz = sizeof(path);
             if (QueryFullProcessImageNameA(ph, 0, path, &sz) &&
                 _strnicmp(path, dir, dirlen) == 0 &&
                 (path[dirlen] == '\\' || path[dirlen] == '\0'))
@@ -379,23 +942,15 @@ static BOOL any_process_in_dir(const char *dir)
 
 static int run_wait(const char *exe)
 {
-    char cmd[MAX_VAL+4]; snprintf(cmd,sizeof(cmd),"\"%s\"",exe);
-    diag("run_wait: cmd=%s", cmd);
+    char cmd[4100]; snprintf(cmd, sizeof(cmd), "\"%s\"", exe);
+    diag("run_wait: %s", cmd);
 
-    /* Set working dir to the exe's own directory so relative-path launchers work */
-    char work_dir[MAX_VAL];
-    strncpy(work_dir, exe, sizeof(work_dir)-1);
+    char work_dir[4096]; strncpy(work_dir, exe, sizeof(work_dir)-1);
     work_dir[sizeof(work_dir)-1] = 0;
-    char *last_sep = NULL;
-    for (char *p = work_dir; *p; p++)
-        if (*p == '\\' || *p == '/') last_sep = p;
-    if (last_sep) *last_sep = 0;
-    else work_dir[0] = 0;
-    diag("run_wait: work_dir=%s", work_dir[0] ? work_dir : "(none)");
+    char *sep = strrchr(work_dir, '\\');
+    if (!sep) sep = strrchr(work_dir, '/');
+    if (sep) *sep = 0; else work_dir[0] = 0;
 
-    /* Create a job object + IOCP so we're notified when all job-tracked
-     * processes exit. Launch suspended so the process is in the job before
-     * it can spawn children. */
     HANDLE job  = CreateJobObjectA(NULL, NULL);
     HANDLE iocp = job ? CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1) : NULL;
     if (job && iocp) {
@@ -405,656 +960,103 @@ static int run_wait(const char *exe)
         SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation,
                                 &jacp, sizeof(jacp));
     }
-    diag("run_wait: job=%p iocp=%p", job, iocp);
 
-    STARTUPINFOA si={sizeof(si)}; PROCESS_INFORMATION pi={0};
+    STARTUPINFOA si = {sizeof(si)}; PROCESS_INFORMATION pi = {0};
     DWORD flags = NORMAL_PRIORITY_CLASS | (job ? CREATE_SUSPENDED : 0);
     if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, flags,
                         NULL, work_dir[0] ? work_dir : NULL, &si, &pi)) {
-        diag("run_wait: CreateProcess FAILED err=%lu", GetLastError());
-        if (iocp) CloseHandle(iocp);
-        if (job)  CloseHandle(job);
+        diag("run_wait: CreateProcess failed: %lu", GetLastError());
+        if (iocp) CloseHandle(iocp); if (job) CloseHandle(job);
         return -1;
     }
-    diag("run_wait: CreateProcess OK pid=%lu", pi.dwProcessId);
     if (job) { AssignProcessToJobObject(job, pi.hProcess); ResumeThread(pi.hThread); }
 
-    /* Wait for the launcher process itself to exit */
     WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD code=0; GetExitCodeProcess(pi.hProcess, &code);
+    DWORD code = 0; GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
 
-    /* Wait for the job to drain (catches children that properly inherit the job).
-     * 4-hour timeout in case a child hangs; loop discards unrelated messages. */
     if (job && iocp) {
-        DWORD      msg; ULONG_PTR key; LPOVERLAPPED ov;
-        int ticks = 86400 * 2; /* 24-hour max */
+        DWORD msg; ULONG_PTR key; LPOVERLAPPED ov;
+        int ticks = 172800;
         while (ticks-- > 0) {
             if (!GetQueuedCompletionStatus(iocp, &msg, &key, &ov, 500)) continue;
             if ((HANDLE)key == job && msg == JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) break;
         }
-        CloseHandle(iocp);
-        CloseHandle(job);
+        CloseHandle(iocp); CloseHandle(job);
     }
 
-    /* Directory scan: catches processes that broke away from the job (e.g. RE2's
-     * launcher spawning the game as a fully independent process). Wait until no
-     * process whose exe lives under work_dir has been seen for 1 second. */
     if (work_dir[0]) {
-        int clear = 0, ticks = 14400 * 2;
-        while (clear < 2 && ticks-- > 0) {
-            Sleep(500);
-            clear = any_process_in_dir(work_dir) ? 0 : clear + 1;
-        }
+        int clear = 0, ticks = 28800;
+        while (clear < 2 && ticks-- > 0) { Sleep(500); clear = any_process_in_dir(work_dir) ? 0 : clear+1; }
     }
-
     return (int)code;
 }
 
-/* ── Dialog ──────────────────────────────────────────────────────────────── */
+#endif /* _WIN32 */
 
-#define TIMER_XI      1
-#define TIMER_READY   2
-#define TIMER_DISMISS 3
+/* ── Entry point ───────────────────────────────────────────────────────────── */
 
-typedef struct { char label[80]; COLORREF color; int result; RECT r; } Btn;
-
-static Btn  g_btns[3];
-static int  g_nbtns = 0, g_sel = 0, g_done = -1;
-static BOOL g_syncing = FALSE;
-static char g_heading[128], g_body[512];
-
-/* ── Phase state machine ─────────────────────────────────────────────────── */
-
-typedef enum {
-    PH_SYNCING_PRE,     /* waiting for pre-launch pull */
-    PH_CONFLICT,        /* conflict choice — interactive */
-    PH_SYNCING_RESOLVE, /* waiting for conflict-resolution pull */
-    PH_NO_CONNECTION,   /* no-connection choice — interactive */
-    PH_SYNCED_OK,       /* brief "Saves synced!" notification */
-    PH_PUSHING,         /* waiting for post-game push */
-    PH_PUSHED,          /* brief "Saves uploaded!" notification */
-} Phase;
-
-static Phase g_phase;
-
-/* Returns TRUE for phases where any button press closes the window early */
-static BOOL phase_dismissable(void)
+int main(int argc, char *argv[])
 {
-    return g_phase == PH_SYNCED_OK || g_phase == PH_PUSHED;
-}
-
-/* ── GDI helpers ─────────────────────────────────────────────────────────── */
-
-static HFONT make_font(int base_pt, BOOL bold)
-{
-    return CreateFontA(
-        -SF(base_pt), 0, 0, 0,
-        bold ? FW_BOLD : FW_NORMAL,
-        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        DEFAULT_PITCH|FF_SWISS, "Segoe UI");
-}
-
-static void fill(HDC dc, int x, int y, int w, int h, COLORREF c)
-{
-    RECT r = {x,y,x+w,y+h}; HBRUSH b = CreateSolidBrush(c);
-    FillRect(dc,&r,b); DeleteObject(b);
-}
-
-static void rrect(HDC dc, RECT *r, COLORREF fc, COLORREF bc, int bw)
-{
-    int rx = S(10)*2;
-    HBRUSH b = CreateSolidBrush(fc); HPEN p = CreatePen(PS_SOLID,bw,bc);
-    HBRUSH ob=(HBRUSH)SelectObject(dc,b); HPEN op=(HPEN)SelectObject(dc,p);
-    RoundRect(dc,r->left,r->top,r->right,r->bottom,rx,rx);
-    SelectObject(dc,ob); SelectObject(dc,op); DeleteObject(b); DeleteObject(p);
-}
-
-/* ── Paint ───────────────────────────────────────────────────────────────── */
-
-static void paint(HWND hwnd)
-{
-    PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
-    HDC mem = CreateCompatibleDC(hdc);
-    HBITMAP bmp = CreateCompatibleBitmap(hdc, g_sw, g_sh);
-    HBITMAP obmp = (HBITMAP)SelectObject(mem, bmp);
-
-    int pad     = S(48);
-    int btn_h   = S(72);
-    int btn_gap = S(16);
-    int acc_h   = S(4);
-
-    /* full-screen background */
-    fill(mem, 0, 0, g_sw, g_sh, C_BG);
-
-    /* windowed: panel fills the whole window; fullscreen: centered 70%×60% panel */
-    int pw = g_windowed ? g_sw : g_sw * 7 / 10;
-    int ph = g_windowed ? g_sh : g_sh * 6 / 10;
-    int px = (g_sw - pw) / 2;
-    int py = (g_sh - ph) / 2;
-
-    RECT panel = {px, py, px+pw, py+ph};
-    HBRUSH panelbr = CreateSolidBrush(C_PANEL);
-    FillRect(mem, &panel, panelbr);
-    DeleteObject(panelbr);
-
-    /* accent bar at top of panel */
-    fill(mem, px, py, pw, acc_h, C_ACCENT);
-
-    /* centered logo — drawn behind all text/buttons */
-    if (g_icon_bmp) {
-        int icon_sz = (pw < ph ? pw : ph) / 2;
-        int ix = px + (pw - icon_sz) / 2;
-        int iy = py + (ph - icon_sz) / 2;
-        HDC icon_dc = CreateCompatibleDC(mem);
-        HBITMAP old_bmp = (HBITMAP)SelectObject(icon_dc, g_icon_bmp);
-        BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-        AlphaBlend(mem, ix, iy, icon_sz, icon_sz,
-                   icon_dc, 0, 0, g_icon_w, g_icon_h, bf);
-        SelectObject(icon_dc, old_bmp);
-        DeleteDC(icon_dc);
-    }
-
-    SetBkMode(mem, TRANSPARENT);
-
-    /* "EXTERNALGAMESYNC" label */
-    {
-        HFONT f = make_font(13, TRUE), o = (HFONT)SelectObject(mem, f);
-        SetTextColor(mem, C_DIM);
-        RECT r = {px+pad, py+S(12), px+pw-pad, py+S(40)};
-        DrawTextA(mem, "EXTERNALGAMESYNC", -1, &r, DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-        DeleteObject(SelectObject(mem, o));
-    }
-
-    /* heading */
-    {
-        HFONT f = make_font(26, TRUE), o = (HFONT)SelectObject(mem, f);
-        SetTextColor(mem, C_WHITE);
-        RECT r = {px+pad, py+S(44), px+pw-pad, py+S(100)};
-        DrawTextA(mem, g_heading, -1, &r, DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-        DeleteObject(SelectObject(mem, o));
-    }
-
-    /* divider */
-    {
-        HPEN p = CreatePen(PS_SOLID,S(1),RGB(0x28,0x28,0x44));
-        HPEN op = (HPEN)SelectObject(mem, p);
-        int dy = py + S(106);
-        MoveToEx(mem, px+pad, dy, NULL); LineTo(mem, px+pw-pad, dy);
-        SelectObject(mem, op); DeleteObject(p);
-    }
-
-    /* body text */
-    {
-        HFONT f = make_font(18, FALSE), o = (HFONT)SelectObject(mem, f);
-        SetTextColor(mem, C_TEXT);
-        int bottom = g_syncing
-            ? py + ph - pad
-            : py + ph - btn_h - pad*2 - S(8);
-        RECT r = {px+pad, py+S(114), px+pw-pad, bottom};
-        DrawTextA(mem, g_body, -1, &r, DT_LEFT|DT_WORDBREAK);
-        DeleteObject(SelectObject(mem, o));
-    }
-
-    /* buttons */
-    if (!g_syncing) {
-        /* layout buttons inside the panel */
-        int bw = (pw - pad*2 - btn_gap*(g_nbtns-1)) / g_nbtns;
-        int by = py + ph - btn_h - pad;
-        for (int i = 0; i < g_nbtns; i++) {
-            g_btns[i].r.left   = px + pad + i*(bw+btn_gap);
-            g_btns[i].r.right  = g_btns[i].r.left + bw;
-            g_btns[i].r.top    = by;
-            g_btns[i].r.bottom = by + btn_h;
-        }
-
-        HFONT f = make_font(18, TRUE), o = (HFONT)SelectObject(mem, f);
-        for (int i = 0; i < g_nbtns; i++) {
-            BOOL sel = (i == g_sel);
-            rrect(mem, &g_btns[i].r, g_btns[i].color,
-                  sel ? C_SEL_BDR : g_btns[i].color, sel ? S(3) : S(1));
-            SetTextColor(mem, C_WHITE);
-            DrawTextA(mem, g_btns[i].label, -1, &g_btns[i].r,
-                      DT_CENTER|DT_VCENTER|DT_SINGLELINE);
-        }
-        DeleteObject(SelectObject(mem, o));
-
-        /* navigation hint below panel */
-        {
-            HFONT f2 = make_font(14, FALSE), o2 = (HFONT)SelectObject(mem, f2);
-            SetTextColor(mem, C_DIM);
-            RECT r = {px, py+ph+S(12), px+pw, py+ph+S(36)};
-            DrawTextA(mem,
-                "Press labeled button directly   \xb7   D-Pad / Arrows to navigate   \xb7   Start / Enter to confirm   \xb7   Esc to cancel",
-                -1, &r, DT_CENTER|DT_SINGLELINE);
-            DeleteObject(SelectObject(mem, o2));
-        }
-    }
-
-    BitBlt(hdc, 0, 0, g_sw, g_sh, mem, 0, 0, SRCCOPY);
-    SelectObject(mem, obmp); DeleteObject(bmp); DeleteDC(mem);
-    EndPaint(hwnd, &ps);
-}
-
-/* ── Window proc ─────────────────────────────────────────────────────────── */
-
-static void set_sel(HWND hwnd, int idx)
-{
-    g_sel = (idx + g_nbtns) % g_nbtns;
-    InvalidateRect(hwnd, NULL, FALSE);
-}
-
-/* Forward declarations for setup functions used by advance() */
-static void setup_conflict(const char *game);
-static void setup_syncing(void);
-static void setup_synced(void);
-static void setup_pushed(void);
-
-/* Advance the phase state machine.  Called by timers and interactive choices.
- * For passive phases (syncing, pushed notification) this transitions the
- * window content in-place.  For terminal states it calls PostQuitMessage. */
-static void advance(HWND hwnd, int result)
-{
-    switch (g_phase) {
-
-    case PH_SYNCING_PRE: {
-        /* Pull complete — re-read status and decide what to show next */
-        EgsStatus ns = {0};
-        delete_poll_file();
-        read_status(&ns);
-        KillTimer(hwnd, TIMER_READY);
-        if (!strcmp(ns.status, "conflict")) {
-            g_phase = PH_CONFLICT;
-            setup_conflict(ns.game);
-        } else {
-            g_phase = PH_SYNCED_OK;
-            setup_synced();
-            SetTimer(hwnd, TIMER_DISMISS, 2000, NULL);
-        }
-        InvalidateRect(hwnd, NULL, FALSE);
-        return;
-    }
-
-    case PH_CONFLICT:
-        if (result == IDCANCEL || result < 0) {
-            write_cancel_file();
-            g_done = IDCANCEL;
-            PostQuitMessage(0);
-            return;
-        }
-        write_choice(result == IDYES ? "remote" : "local");
-        g_phase = PH_SYNCING_RESOLVE;
-        set_poll_file("egs_ready.txt");
-        setup_syncing();
-        SetTimer(hwnd, TIMER_READY, 500, NULL);
-        InvalidateRect(hwnd, NULL, FALSE);
-        return;
-
-    case PH_SYNCING_RESOLVE:
-        delete_poll_file();
-        KillTimer(hwnd, TIMER_READY);
-        g_phase = PH_SYNCED_OK;
-        setup_synced();
-        SetTimer(hwnd, TIMER_DISMISS, 2000, NULL);
-        InvalidateRect(hwnd, NULL, FALSE);
-        return;
-
-    case PH_NO_CONNECTION:
-        if (result == IDNO || result < 0) {
-            write_cancel_file();
-            g_done = IDCANCEL;
-        } else {
-            g_done = IDYES;
-        }
-        PostQuitMessage(0);
-        return;
-
-    case PH_SYNCED_OK:
-        g_done = IDYES;
-        PostQuitMessage(0);
-        return;
-
-    case PH_PUSHING:
-        delete_poll_file();
-        KillTimer(hwnd, TIMER_READY);
-        g_phase = PH_PUSHED;
-        setup_pushed();
-        SetTimer(hwnd, TIMER_DISMISS, 3000, NULL);
-        InvalidateRect(hwnd, NULL, FALSE);
-        return;
-
-    case PH_PUSHED:
-        g_done = 0;
-        PostQuitMessage(0);
-        return;
-    }
-}
-
-static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
-{
-    switch (msg) {
-    case WM_PAINT:        paint(hwnd); return 0;
-    case WM_ERASEBKGND:   return 1;
-
-    case WM_TIMER:
-        if (wp == TIMER_XI) {
-            WORD p = xi_poll();
-            if (!g_syncing) {
-                if (p & XI_LEFT)                  set_sel(hwnd, g_sel-1);
-                if (p & XI_RIGHT)                 set_sel(hwnd, g_sel+1);
-                if (p & XI_A)                     advance(hwnd, g_btns[0].result);
-                if ((p & XI_B) && g_nbtns > 1)    advance(hwnd, g_btns[1].result);
-                if ((p & XI_Y) && g_nbtns > 2)    advance(hwnd, g_btns[2].result);
-                if (p & XI_START)                 advance(hwnd, g_btns[g_sel].result);
-            } else if (phase_dismissable()) {
-                if (p & (XI_A|XI_B|XI_Y|XI_START)) advance(hwnd, 0);
-            }
-        } else if (wp == TIMER_READY) {
-            if (ready_exists()) advance(hwnd, 0);
-        } else if (wp == TIMER_DISMISS) {
-            advance(hwnd, 0);
-        }
-        return 0;
-
-    case WM_KEYDOWN:
-        if (!g_syncing) {
-            switch (wp) {
-            case VK_LEFT:  case VK_UP:    set_sel(hwnd, g_sel-1); break;
-            case VK_RIGHT: case VK_DOWN:  set_sel(hwnd, g_sel+1); break;
-            case VK_RETURN: case VK_SPACE: advance(hwnd, g_btns[g_sel].result); break;
-            case VK_ESCAPE:
-                advance(hwnd, g_nbtns > 2 ? g_btns[2].result : g_btns[g_nbtns-1].result);
-                break;
-            }
-        } else if (phase_dismissable()) {
-            if (wp == VK_ESCAPE || wp == VK_RETURN || wp == VK_SPACE) advance(hwnd, 0);
-        }
-        return 0;
-
-    case WM_LBUTTONDOWN: {
-        if (g_syncing) {
-            if (phase_dismissable()) advance(hwnd, 0);
-            return 0;
-        }
-        int x = (short)LOWORD(lp), y = (short)HIWORD(lp);
-        for (int i = 0; i < g_nbtns; i++)
-            if (x >= g_btns[i].r.left && x < g_btns[i].r.right &&
-                y >= g_btns[i].r.top  && y < g_btns[i].r.bottom)
-                advance(hwnd, g_btns[i].result);
-        return 0;
-    }
-
-    case WM_MOUSEMOVE: {
-        if (g_syncing) return 0;
-        int x = (short)LOWORD(lp), y = (short)HIWORD(lp);
-        for (int i = 0; i < g_nbtns; i++)
-            if (x >= g_btns[i].r.left && x < g_btns[i].r.right &&
-                y >= g_btns[i].r.top  && y < g_btns[i].r.bottom)
-                { set_sel(hwnd, i); break; }
-        return 0;
-    }
-
-    case WM_DESTROY: if (g_done < 0) PostQuitMessage(0); return 0;
-    }
-    return DefWindowProcA(hwnd, msg, wp, lp);
-}
-
-/* ── Dialog content setup ────────────────────────────────────────────────── */
-
-static void setup_conflict(const char *game)
-{
-    snprintf(g_heading, sizeof(g_heading), "%s - Save Conflict", game[0] ? game : "Game");
-    snprintf(g_body, sizeof(g_body),
-        "Saves have changed on cloud storage since your last sync.\n\n"
-        "Both sides will be backed up before any changes are made.");
-    g_nbtns = 3; g_syncing = FALSE;
-    strncpy(g_btns[0].label,"(A)  Keep Cloud",    79); g_btns[0].color=C_GREEN;  g_btns[0].result=IDYES;
-    strncpy(g_btns[1].label,"(B)  Keep Local",    79); g_btns[1].color=C_RED;    g_btns[1].result=IDNO;
-    strncpy(g_btns[2].label,"(Y)  Cancel Launch", 79); g_btns[2].color=C_GOLD;   g_btns[2].result=IDCANCEL;
-}
-
-static void setup_no_connection(const char *game)
-{
-    snprintf(g_heading, sizeof(g_heading), "%s - No Connection", game[0] ? game : "Game");
-    snprintf(g_body, sizeof(g_body),
-        "Could not reach cloud storage before launching.\n\n"
-        "Your local saves are safe but won't be updated from the server.\n"
-        "Continue launching anyway?");
-    g_nbtns = 2; g_syncing = FALSE;
-    strncpy(g_btns[0].label,"(A)  Continue Anyway",79); g_btns[0].color=C_BLUE; g_btns[0].result=IDYES;
-    strncpy(g_btns[1].label,"(B)  Cancel Launch",  79); g_btns[1].color=C_RED;  g_btns[1].result=IDNO;
-}
-
-static void setup_no_connection_server_ahead(const char *game)
-{
-    snprintf(g_heading, sizeof(g_heading), "%s - No Connection", game[0] ? game : "Game");
-    snprintf(g_body, sizeof(g_body),
-        "Could not reach cloud storage before launching.\n\n"
-        "WARNING: The server had unsynced changes last time it was reachable.\n"
-        "You may be playing with outdated saves.\n\n"
-        "Continue launching anyway?");
-    g_nbtns = 2; g_syncing = FALSE;
-    strncpy(g_btns[0].label,"(A)  Continue Anyway",79); g_btns[0].color=C_BLUE; g_btns[0].result=IDYES;
-    strncpy(g_btns[1].label,"(B)  Cancel Launch",  79); g_btns[1].color=C_RED;  g_btns[1].result=IDNO;
-}
-
-static void setup_syncing(void)
-{
-    strncpy(g_heading, "Syncing saves...", sizeof(g_heading)-1);
-    strncpy(g_body,
-        "Syncing your saves with cloud storage.\n\n"
-        "The game will launch automatically when the sync completes.",
-        sizeof(g_body)-1);
-    g_nbtns = 0; g_syncing = TRUE;
-}
-
-static void setup_synced(void)
-{
-    strncpy(g_heading, "Saves synced!", sizeof(g_heading)-1);
-    strncpy(g_body, "Saves are up to date. Launching game...", sizeof(g_body)-1);
-    g_nbtns = 0; g_syncing = TRUE;
-}
-
-static void setup_pushing(void)
-{
-    strncpy(g_heading, "Saving game...", sizeof(g_heading)-1);
-    strncpy(g_body, "Pushing your saves to cloud storage.", sizeof(g_body)-1);
-    g_nbtns = 0; g_syncing = TRUE;
-}
-
-static void setup_pushed(void)
-{
-    strncpy(g_heading, "Saves uploaded!", sizeof(g_heading)-1);
-    strncpy(g_body, "See you next time.", sizeof(g_body)-1);
-    g_nbtns = 0; g_syncing = TRUE;
-}
-
-/* ── Create / run a dialog window, return g_done ────────────────────────── */
-
-static int run_dialog(HINSTANCE hInst, BOOL ready_timer)
-{
-    static BOOL registered = FALSE;
-    if (!registered) {
-        WNDCLASSA wc = {0};
-        wc.lpfnWndProc   = wnd_proc;
-        wc.hInstance     = hInst;
-        wc.lpszClassName = "EGSDialog";
-        wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
-        RegisterClassA(&wc);
-        registered = TRUE;
-    }
-
-    g_done = -1;
-
-    int wx = 0, wy = 0;
-    if (g_windowed) {
-        wx = (GetSystemMetrics(SM_CXSCREEN) - g_sw) / 2;
-        wy = (GetSystemMetrics(SM_CYSCREEN) - g_sh) / 2;
-    }
-    HWND hwnd = CreateWindowExA(
-        WS_EX_TOPMOST | WS_EX_APPWINDOW,
-        "EGSDialog", "ExternalGameSync",
-        WS_POPUP | WS_VISIBLE,
-        wx, wy, g_sw, g_sh,
-        NULL, NULL, hInst, NULL);
-    diag("run_dialog: CreateWindowExA hwnd=%p err=%lu screen=%dx%d phase=%d",
-         hwnd, GetLastError(), g_sw, g_sh, (int)g_phase);
-    if (!hwnd) return -1;
-
-    RECT wr = {0}; GetWindowRect(hwnd, &wr);
-    diag("run_dialog: window rect (%ld,%ld)-(%ld,%ld)", wr.left, wr.top, wr.right, wr.bottom);
-    HMONITOR hm = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO mi = {sizeof(mi)};
-    if (GetMonitorInfoA(hm, &mi))
-        diag("run_dialog: monitor work=(%ld,%ld)-(%ld,%ld) full=(%ld,%ld)-(%ld,%ld) primary=%s",
-             mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom,
-             mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom,
-             (mi.dwFlags & MONITORINFOF_PRIMARY) ? "yes" : "no");
-
-    SetTimer(hwnd, TIMER_XI, 33, NULL);
-    if (ready_timer) SetTimer(hwnd, TIMER_READY, 500, NULL);
-    /* Auto-dismiss when starting directly at a notification phase */
-    if      (g_phase == PH_SYNCED_OK) SetTimer(hwnd, TIMER_DISMISS, 2000, NULL);
-    else if (g_phase == PH_PUSHED)    SetTimer(hwnd, TIMER_DISMISS, 3000, NULL);
-    SetForegroundWindow(hwnd);
-
-    MSG msg;
-    while (GetMessageA(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessageA(&msg); }
-    DestroyWindow(hwnd);
-    return g_done;
-}
-
-/* ── Pre-game sequence (one window for all pre-launch phases) ────────────── */
-
-static int run_pre_game(HINSTANCE hInst, const EgsStatus *s0)
-{
-    EgsStatus s;
-    memcpy(&s, s0, sizeof s);
-    BOOL was_syncing = !strcmp(s.status, "syncing");
-
-    /* Fast path: pull already finished before pre-launcher.exe started.
-     * Check unconditionally — Linux may have updated egs_status.txt from
-     * "syncing" to "in_sync" before we read it, so was_syncing can be FALSE
-     * even though a sync did complete. */
-    char ready_path[MAX_PATH2];
-    ipc_path("egs_ready.txt", ready_path, sizeof ready_path);
-    if (GetFileAttributesA(ready_path) != INVALID_FILE_ATTRIBUTES) {
-        DeleteFileA(ready_path);
-        memset(&s, 0, sizeof s);
-        read_status(&s);
-        was_syncing = TRUE; /* sync definitely completed */
-    }
-
-    if (!strcmp(s.status, "syncing")) {
-        /* Normal sync: window starts at syncing, advance() handles the rest */
-        g_phase = PH_SYNCING_PRE;
-        set_poll_file("egs_ready.txt");
-        setup_syncing();
-        run_dialog(hInst, /*ready_timer=*/TRUE);
-    } else if (!strcmp(s.status, "conflict")) {
-        /* Conflict without a prior syncing phase */
-        g_phase = PH_CONFLICT;
-        setup_conflict(s.game);
-        run_dialog(hInst, FALSE);
-    } else if (!strcmp(s.status, "no_connection")) {
-        int sa = (!strcmp(s.last_status, "cloud_ahead") || !strcmp(s.last_status, "conflict"));
-        g_phase = PH_NO_CONNECTION;
-        if (sa) setup_no_connection_server_ahead(s.game);
-        else    setup_no_connection(s.game);
-        run_dialog(hInst, FALSE);
-    } else if (was_syncing) {
-        /* Clean fast-pull: show brief "Saves synced!" notification */
-        g_phase = PH_SYNCED_OK;
-        setup_synced();
-        run_dialog(hInst, FALSE); /* run_dialog sets 2s timer for PH_SYNCED_OK */
-    } else {
-        return IDYES; /* nothing to show */
-    }
-
-    return (g_done == IDCANCEL) ? IDCANCEL : IDYES;
-}
-
-/* ── Post-game sequence (one window: pushing → pushed) ───────────────────── */
-
-static void run_post_game(HINSTANCE hInst)
-{
-    write_push_signal();
-    g_phase = PH_PUSHING;
-    set_poll_file("egs_push_done.txt");
-    setup_pushing();
-    run_dialog(hInst, /*ready_timer=*/TRUE);
-    /* advance() handles PH_PUSHING → PH_PUSHED → PostQuitMessage */
-}
-
-/* ── Entry point ─────────────────────────────────────────────────────────── */
-
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow)
-{
-    (void)hPrev; (void)lpCmd; (void)nShow;
+    SDL_SetMainReady();
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
+    TTF_Init();
 
     diag_open();
+    ipc_init();
 
-    /* Read status file first so FULLSCREEN= can inform init_scale() */
     EgsStatus s = {0};
     read_status(&s);
-
     init_scale(s.fullscreen);
-    xi_init();
-    icon_load();
 
-    diag("=== startup ===");
-    diag("screen: %dx%d  scale: %d/%d  windowed=%d  fullscreen_hint=%d",
-         g_sw, g_sh, g_scale_n, g_scale_d, (int)g_windowed, s.fullscreen);
-    diag("icon_bmp: %p  %dx%d", g_icon_bmp, g_icon_w, g_icon_h);
-    diag("xi: %p", g_xi);
+    controllers_open_all();
 
-    diag("--- environment ---");
-    diag_env("STEAM_COMPAT_DATA_PATH");
-    diag_env("STEAM_COMPAT_CLIENT_INSTALL_PATH");
-    diag_env("SteamAppId");
-    diag_env("STEAM_GAMEPADUI");
-    diag_env("SteamGamepadUI");
-    diag_env("GAMESCOPE_WAYLAND_DISPLAY");
-    diag_env("TEMP");
-    diag_env("TMP");
-    diag_env("SystemRoot");
-    diag_env("WINEPREFIX");
-    diag_env("WINE_MONO_VERSION");
+#ifdef _WIN32
+    /* Windows: always run the full flow (pre → game → post) */
+    (void)argc; (void)argv;
+    diag("mode: windows full flow  game_exe=%s", s.game_exe);
 
-    diag("--- drives ---");
-    diag_drives();
+    int cancelled = run_pre_game(&s);
+    window_close();
+    fonts_free();
 
-    diag("--- status file ---");
-    diag("STATUS=%s", s.status);
-    diag("GAME=%s",   s.game);
-    diag("LAST_STATUS=%s", s.last_status);
-    diag("FULLSCREEN=%d", s.fullscreen);
+    if (cancelled) { diag("cancelled"); controllers_close_all(); TTF_Quit(); SDL_Quit(); return 1; }
 
-    diag("--- game exe ---");
-    diag_exe(s.game_exe);
-
-    diag("--- pre-game sequence ---");
-    if (run_pre_game(hInst, &s) == IDCANCEL) {
-        diag("pre_game: CANCELLED");
-        icon_free();
-        return 1;
-    }
-    diag("pre_game: OK  g_done=%d", g_done);
-
-    if (!s.game_exe[0]) {
-        diag("no game_exe — exiting cleanly");
-        icon_free();
-        return 0;
+    int exit_code = 0;
+    if (s.game_exe[0]) {
+        diag("launching: %s", s.game_exe);
+        exit_code = run_wait(s.game_exe);
+        diag("run_wait: %d", exit_code);
+    } else {
+        diag("no game_exe — skipping launch");
     }
 
-    diag("--- launching game ---");
-    int exit_code = run_wait(s.game_exe);
-    diag("run_wait returned: %d", exit_code);
+    run_post_game();
+    window_close();
+    fonts_free();
 
-    run_post_game(hInst);
-    diag("post_game done");
-
-    icon_free();
+    controllers_close_all();
+    TTF_Quit();
+    SDL_Quit();
     return exit_code;
+
+#else
+    /* Linux: two-phase invocation: pre | post */
+    const char *mode = (argc >= 2) ? argv[1] : "pre";
+    diag("mode: %s", mode);
+
+    int rc = 0;
+    if (!strcmp(mode, "post")) {
+        run_post_game();
+    } else {
+        rc = run_pre_game(&s);
+    }
+
+    window_close();
+    fonts_free();
+    controllers_close_all();
+    TTF_Quit();
+    SDL_Quit();
+    return rc; /* 0 = ok, 1 = cancelled */
+#endif
 }
