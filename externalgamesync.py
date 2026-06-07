@@ -704,7 +704,8 @@ def cmd_update_shortcuts(args):
             if mc.get("platform") == "windows":
                 exe_real = Path(mc["exe_path"])
             elif _linux_native:
-                exe_real = Path(ns_entry.get("exe", "").strip().strip('"'))
+                _saved_exe = mc.get("shortcut_exe", "")
+                exe_real = Path(_saved_exe) if _saved_exe else Path(ns_entry.get("exe", "").strip().strip('"'))
             else:
                 exe_real = resolve_exe_path(mc["app_id"], game_cfg["exe_path"])
             ok, msg = update_shortcut_launch(
