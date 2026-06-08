@@ -39,6 +39,15 @@ $preLauncherSrc = "$scriptDir\pre-launcher\pre-launcher.exe"
 if (Test-Path $preLauncherSrc) {
     Copy-Item $preLauncherSrc "$installDir\pre-launcher.exe" -Force
     Write-Host "[ok] Installed pre-launcher.exe"
+    foreach ($dll in @('SDL2.dll', 'SDL2_ttf.dll')) {
+        $dllSrc = "$scriptDir\pre-launcher\$dll"
+        if (Test-Path $dllSrc) {
+            Copy-Item $dllSrc "$installDir\$dll" -Force
+            Write-Host "[ok] Installed $dll"
+        } else {
+            Write-Host "[warn] pre-launcher\$dll not found - pre-launcher may fail to start"
+        }
+    }
 } else {
     Write-Host "[warn] pre-launcher\pre-launcher.exe not found - sync dialogs will fall back to minimal UI"
     Write-Host "       To build it: cl /O2 /W3 pre-launcher\pre-launcher.c user32.lib gdi32.lib /Fe:pre-launcher\pre-launcher.exe"
