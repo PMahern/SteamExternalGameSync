@@ -371,11 +371,16 @@ _t_push.start()
 _proc = subprocess.Popen([PRELAUNCHER])
 _exit_code = _proc.wait()
 
+# Wait for the pull to finish before triggering push.
+# Without this, if the pre-launcher exits while pre-launch is still mid-pull
+# (e.g. crashed, or game ran and exited quickly), the fallback push fires
+# concurrently with the pull and can upload stale local saves to the cloud.
+_t_sync.join(timeout=120)
+
 if not os.path.exists(CANCEL_FILE):
     try: _touch(PUSH_START_FILE)
     except OSError: pass
 
-_t_sync.join(timeout=30)
 _t_push.join(timeout=300)
 
 if DISC_IMAGE:
