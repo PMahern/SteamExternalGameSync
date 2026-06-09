@@ -376,7 +376,7 @@ static SDL_Texture *bg_load_one(const unsigned char *data, unsigned int len)
                                                            SDL_PIXELFORMAT_RGBA32);
     if (!surf) { stbi_image_free(px); return NULL; }
     SDL_Texture *t = SDL_CreateTextureFromSurface(g_ren, surf);
-    if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
+    if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
     SDL_FreeSurface(surf);
     stbi_image_free(px);
     return t;
@@ -424,6 +424,39 @@ static void draw_rect_border(int x, int y, int w, int h, SDL_Color c, int bw)
         SDL_Rect r = {x+i, y+i, w-i*2, h-i*2};
         SDL_RenderDrawRect(g_ren, &r);
     }
+}
+
+/* Fade the edges of rect dst to C_PANEL, starting fade_frac (0..1) from each edge.
+ * Draws four gradient quads via SDL_RenderGeometry (available in SDL2 >= 2.0.18). */
+static void draw_fade_edges(SDL_Rect dst, float fade_frac)
+{
+    int fx = (int)(dst.w * fade_frac);
+    int fy = (int)(dst.h * fade_frac);
+    if (fx < 1) fx = 1;
+    if (fy < 1) fy = 1;
+
+    SDL_Color op = {C_PANEL.r, C_PANEL.g, C_PANEL.b, 255};  /* opaque panel colour */
+    SDL_Color tr = {C_PANEL.r, C_PANEL.g, C_PANEL.b,   0};  /* same colour, transparent */
+
+    float x0 = (float)dst.x,            x1 = (float)(dst.x + fx);
+    float x2 = (float)(dst.x + dst.w - fx), x3 = (float)(dst.x + dst.w);
+    float y0 = (float)dst.y,            y1 = (float)(dst.y + fy);
+    float y2 = (float)(dst.y + dst.h - fy), y3 = (float)(dst.y + dst.h);
+
+#define QUAD(ax,ay,ac, bx,by,bc, cx,cy,cc, dx,dy,dc) do { \
+    SDL_Vertex _v[4] = {                                    \
+        {{ax,ay},ac,{0,0}}, {{bx,by},bc,{0,0}},            \
+        {{cx,cy},cc,{0,0}}, {{dx,dy},dc,{0,0}} };          \
+    int _i[6] = {0,1,2, 0,2,3};                            \
+    SDL_RenderGeometry(g_ren, NULL, _v, 4, _i, 6);         \
+} while(0)
+
+    QUAD(x0,y0,op,  x3,y0,op,  x3,y1,tr,  x0,y1,tr);  /* top    */
+    QUAD(x0,y2,tr,  x3,y2,tr,  x3,y3,op,  x0,y3,op);  /* bottom */
+    QUAD(x0,y0,op,  x1,y0,tr,  x1,y3,tr,  x0,y3,op);  /* left   */
+    QUAD(x2,y0,tr,  x3,y0,op,  x3,y3,op,  x2,y3,tr);  /* right  */
+
+#undef QUAD
 }
 
 /* Render UTF-8 text into a texture; caller frees the texture. */
@@ -645,19 +678,6 @@ static void render(void)
     set_color(C_BG);
     SDL_RenderClear(g_ren);
 
-    /* Background image — cover-fit to fill window */
-    {
-        SDL_Texture *bg = bg_for_phase();
-        if (bg) {
-            int iw, ih; SDL_QueryTexture(bg, NULL, NULL, &iw, &ih);
-            float sx = (float)g_sw / iw, sy = (float)g_sh / ih;
-            float sc = sx > sy ? sx : sy;
-            int dw = (int)(iw * sc), dh = (int)(ih * sc);
-            SDL_Rect dst = { (g_sw - dw)/2, (g_sh - dh)/2, dw, dh };
-            SDL_RenderCopy(g_ren, bg, NULL, &dst);
-        }
-    }
-
     /* Panel */
     g_pw = g_windowed ? g_sw : g_sw * 7 / 10;
     g_ph = g_windowed ? g_sh : g_sh * 6 / 10;
@@ -667,13 +687,23 @@ static void render(void)
     fill_rect(g_px, g_py, g_pw, g_ph, C_PANEL);
     fill_rect(g_px, g_py, g_pw, acc_h, C_ACCENT);
 
-    /* Icon (watermark, centered, half panel size, at 20% opacity) */
-    if (g_icon) {
-        int isz = (g_pw < g_ph ? g_pw : g_ph) / 2;
-        SDL_Rect dst = { g_px + (g_pw - isz)/2, g_py + (g_ph - isz)/2, isz, isz };
-        SDL_SetTextureAlphaMod(g_icon, 51); /* 20% */
-        SDL_RenderCopy(g_ren, g_icon, NULL, &dst);
-        SDL_SetTextureAlphaMod(g_icon, 255);
+    /* Phase image (or icon fallback), contain-fitted into the watermark area */
+    {
+        SDL_Texture *phase_img = bg_for_phase();
+        SDL_Texture *img = phase_img ? phase_img : g_icon;
+        Uint8 alpha = phase_img ? 255 : 51; /* icon fallback at 20% */
+        if (img) {
+            int isz = (g_pw < g_ph ? g_pw : g_ph) / 2;
+            int iw, ih; SDL_QueryTexture(img, NULL, NULL, &iw, &ih);
+            float sx = (float)isz / iw, sy = (float)isz / ih;
+            float sc = sx < sy ? sx : sy;
+            int dw = (int)(iw * sc), dh = (int)(ih * sc);
+            SDL_Rect dst = { g_px + (g_pw - dw)/2, g_py + (g_ph - dh)/2, dw, dh };
+            SDL_SetTextureAlphaMod(img, alpha);
+            SDL_RenderCopy(g_ren, img, NULL, &dst);
+            SDL_SetTextureAlphaMod(img, 255);
+            if (phase_img) draw_fade_edges(dst, 0.20f);
+        }
     }
 
     /* "EXTERNALGAMESYNC" label */
