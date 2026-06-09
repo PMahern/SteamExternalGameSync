@@ -10,6 +10,24 @@ This project was developed with extensive AI assistance under my direction and r
 
 ---
 
+## Quick Install
+
+**Linux / SteamOS / Steam Deck** — paste into a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pmahern/steamexternalgamesync/master/download-install.sh | bash
+```
+
+**Windows** — paste into PowerShell or Command Prompt:
+
+```
+powershell -c "iex (iwr 'https://raw.githubusercontent.com/pmahern/steamexternalgamesync/master/download-install.ps1' -UseBasicParsing).Content"
+```
+
+Both commands download the latest release from GitHub, extract it without touching disk in a way that triggers SmartScreen, and run the installer. Python 3 must already be installed on Windows ([python.org/downloads](https://www.python.org/downloads/) — check "Add Python to PATH").
+
+---
+
 ## What it does
 
 - **Automatic save sync on launch and exit** — before a game starts, the latest saves are pulled from the cloud; after you quit, they're pushed back. You just play; the syncing happens in the background.
@@ -33,14 +51,16 @@ This project was developed with extensive AI assistance under my direction and r
 
 ## Install
 
+For first-time setup, use the [Quick Install](#quick-install) one-liner above. If you prefer to clone the repo manually:
+
 ```bash
 git clone https://github.com/pmahern/externalgamesync
 cd externalgamesync
-chmod 755 install.sh
-bash install.sh
+bash install.sh          # Linux
+# or on Windows: powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-No root required. Everything installs to `~/.local/`.
+No root required. Everything installs to `~/.local/` on Linux or `%LOCALAPPDATA%\ExternalGameSync` on Windows.
 
 ---
 

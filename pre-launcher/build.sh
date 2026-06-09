@@ -51,6 +51,35 @@ with open('icon_data.h', 'w') as out:
 PYEOF
 echo "OK icon_data.h"
 
+# ── bg_data.h ─────────────────────────────────────────────────────────────────
+echo "Generating bg_data.h..."
+python3 - <<'PYEOF'
+import sys, os
+
+images = [
+    ('pulling',      '../pulling.png'),
+    ('pushing',      '../pushing.png'),
+    ('done',         '../done.png'),
+    ('conflict',     '../conflict.png'),
+    ('disconnected', '../disconnected.png'),
+]
+
+with open('bg_data.h', 'w') as out:
+    for name, path in images:
+        if not os.path.exists(path):
+            print(f'[warn] {path} not found — {name} background will be absent', file=sys.stderr)
+            out.write(f'static const unsigned char bg_{name}_png[] = {{0}};\n')
+            out.write(f'static const unsigned int  bg_{name}_png_len = 0;\n')
+            continue
+        data = open(path, 'rb').read()
+        lines = ['  ' + ', '.join(format(b, '#04x') for b in data[i:i+12])
+                 for i in range(0, len(data), 12)]
+        out.write(f'static const unsigned char bg_{name}_png[] = {{\n')
+        out.write(',\n'.join(lines))
+        out.write(f'\n}};\nstatic const unsigned int  bg_{name}_png_len = {len(data)};\n')
+PYEOF
+echo "OK bg_data.h"
+
 # ── Distro detection + auto-install ───────────────────────────────────────────
 _sdl2_missing() {
     ! command -v sdl2-config &>/dev/null && ! pkg-config --exists sdl2 2>/dev/null

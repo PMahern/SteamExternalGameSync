@@ -55,6 +55,7 @@
 #pragma GCC diagnostic pop
 
 #include "icon_data.h"
+#include "bg_data.h"
 
 /* ── Diagnostic log ────────────────────────────────────────────────────────── */
 
@@ -255,6 +256,12 @@ static SDL_Renderer *g_ren  = NULL;
 static SDL_Texture  *g_icon = NULL;
 static int           g_icon_w = 0, g_icon_h = 0;
 
+static SDL_Texture  *g_bg_pulling      = NULL;
+static SDL_Texture  *g_bg_pushing      = NULL;
+static SDL_Texture  *g_bg_done         = NULL;
+static SDL_Texture  *g_bg_conflict     = NULL;
+static SDL_Texture  *g_bg_disconnected = NULL;
+
 /* ── Fonts ─────────────────────────────────────────────────────────────────── */
 
 static TTF_Font *g_fnt_heading = NULL; /* 26pt bold  */
@@ -357,6 +364,45 @@ static void icon_free(void)
     if (g_icon) { SDL_DestroyTexture(g_icon); g_icon = NULL; }
 }
 
+/* ── Background images ─────────────────────────────────────────────────────── */
+
+static SDL_Texture *bg_load_one(const unsigned char *data, unsigned int len)
+{
+    if (!len) return NULL;
+    int w, h, ch;
+    unsigned char *px = stbi_load_from_memory(data, (int)len, &w, &h, &ch, 4);
+    if (!px) return NULL;
+    SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormatFrom(px, w, h, 32, w*4,
+                                                           SDL_PIXELFORMAT_RGBA32);
+    if (!surf) { stbi_image_free(px); return NULL; }
+    SDL_Texture *t = SDL_CreateTextureFromSurface(g_ren, surf);
+    if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
+    SDL_FreeSurface(surf);
+    stbi_image_free(px);
+    return t;
+}
+
+static void bg_load(void)
+{
+    g_bg_pulling      = bg_load_one(bg_pulling_png,      bg_pulling_png_len);
+    g_bg_pushing      = bg_load_one(bg_pushing_png,      bg_pushing_png_len);
+    g_bg_done         = bg_load_one(bg_done_png,         bg_done_png_len);
+    g_bg_conflict     = bg_load_one(bg_conflict_png,     bg_conflict_png_len);
+    g_bg_disconnected = bg_load_one(bg_disconnected_png, bg_disconnected_png_len);
+    diag("bg loaded: pulling=%p pushing=%p done=%p conflict=%p disconnected=%p",
+         (void*)g_bg_pulling, (void*)g_bg_pushing, (void*)g_bg_done,
+         (void*)g_bg_conflict, (void*)g_bg_disconnected);
+}
+
+static void bg_free(void)
+{
+    if (g_bg_pulling)      { SDL_DestroyTexture(g_bg_pulling);      g_bg_pulling      = NULL; }
+    if (g_bg_pushing)      { SDL_DestroyTexture(g_bg_pushing);      g_bg_pushing      = NULL; }
+    if (g_bg_done)         { SDL_DestroyTexture(g_bg_done);         g_bg_done         = NULL; }
+    if (g_bg_conflict)     { SDL_DestroyTexture(g_bg_conflict);     g_bg_conflict     = NULL; }
+    if (g_bg_disconnected) { SDL_DestroyTexture(g_bg_disconnected); g_bg_disconnected = NULL; }
+}
+
 /* ── Drawing helpers ───────────────────────────────────────────────────────── */
 
 static void set_color(SDL_Color c)
@@ -423,6 +469,20 @@ typedef enum {
 } Phase;
 
 static Phase g_phase;
+
+static SDL_Texture *bg_for_phase(void)
+{
+    switch (g_phase) {
+    case PH_SYNCING_PRE:
+    case PH_SYNCING_RESOLVE: return g_bg_pulling;
+    case PH_PUSHING:         return g_bg_pushing;
+    case PH_SYNCED_OK:
+    case PH_PUSHED:          return g_bg_done;
+    case PH_CONFLICT:        return g_bg_conflict;
+    case PH_NO_CONNECTION:   return g_bg_disconnected;
+    }
+    return NULL;
+}
 
 /* Button: label, fill color, result value, screen rect */
 typedef struct { char label[80]; SDL_Color color; int result; SDL_Rect r; } Btn;
@@ -584,6 +644,19 @@ static void render(void)
     /* Background */
     set_color(C_BG);
     SDL_RenderClear(g_ren);
+
+    /* Background image — cover-fit to fill window */
+    {
+        SDL_Texture *bg = bg_for_phase();
+        if (bg) {
+            int iw, ih; SDL_QueryTexture(bg, NULL, NULL, &iw, &ih);
+            float sx = (float)g_sw / iw, sy = (float)g_sh / ih;
+            float sc = sx > sy ? sx : sy;
+            int dw = (int)(iw * sc), dh = (int)(ih * sc);
+            SDL_Rect dst = { (g_sw - dw)/2, (g_sh - dh)/2, dw, dh };
+            SDL_RenderCopy(g_ren, bg, NULL, &dst);
+        }
+    }
 
     /* Panel */
     g_pw = g_windowed ? g_sw : g_sw * 7 / 10;
@@ -850,6 +923,7 @@ static int window_open(void)
 
 static void window_close(void)
 {
+    bg_free();
     icon_free();
     if (g_ren) { SDL_DestroyRenderer(g_ren); g_ren = NULL; }
     if (g_win) { SDL_DestroyWindow(g_win);   g_win = NULL; }
@@ -893,6 +967,7 @@ static int run_pre_game(const EgsStatus *s0)
     if (!window_open()) return 0;
     if (!fonts_load()) diag("warning: fonts not loaded — text will not render");
     icon_load();
+    bg_load();
     run_loop();
     return (g_done == 1) ? 1 : 0;
 }
@@ -909,6 +984,7 @@ static void run_post_game(void)
     if (!window_open()) return;
     if (!fonts_load()) diag("warning: fonts not loaded");
     icon_load();
+    bg_load();
     run_loop();
 }
 
