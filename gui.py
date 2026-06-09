@@ -32,8 +32,8 @@ def _build_sidebar():
 
     nav_items = [
         ("Home",           "home",     refresh_and_home),
-        ("Assign Config",  "assign",   flow_assign),
         ("Add New Game Config",       "add",      flow_add),
+        ("Assign Config",  "assign",   flow_assign),
         ("Sync Artwork",   "art",      flow_sync_art),
         ("Sync",           "sync_all", flow_sync_all),
         ("Relink Saves",   "relink",   flow_relink),
