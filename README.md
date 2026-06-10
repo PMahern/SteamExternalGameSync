@@ -196,9 +196,11 @@ Select the steam shortcut for the game you want to setup cloud syncing. This is 
 ![Select Steam shortcut](docs/examples/assign_3.png)
 
 **Step 4 — Confirm paths (Final Step)**
-The GUI resolves exe and save paths from the shared config.
+The GUI resolves exe and save paths from the shared config. You can still find them manually if the auto lookup isn't having any success.
 - *Non-Steam shortcut*: tries to auto-detect the Proton prefix by scanning recently modified prefixes for the game's exe. On Linux, only the prefix App ID is stored in the local config — paths are re-derived from the shared config at runtime. On Windows, absolute paths are stored locally because they vary by username and install location.
 - *Native Steam game on Linux*: the save path is resolved automatically from the App ID; no exe path is needed (Steam provides it at launch).
+
+![Select Steam shortcut](docs/examples/assign_4.png)
 
 Clicking **Assign** will:
 - Register this machine in the local config and push the updated `games.json` (if any changes were made).
