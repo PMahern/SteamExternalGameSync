@@ -234,10 +234,7 @@ def get_sync_status(game_id: str, game: dict | None = None) -> str:
     )
 
     if local_changed and remote_changed:
-        if _is_true_conflict(last_remote, current_remote, last_local, current_local):
-            status = "conflict"
-        else:
-            status = "cloud_ahead"
+        status = "conflict"
     elif remote_changed:
         status = "cloud_ahead"
     elif local_changed:
@@ -320,7 +317,15 @@ def check_for_conflict(game_id: str, game: dict | None = None) -> tuple[str, dic
     last_local = _load_local_snapshot(game_id)
     if last_local is not None:
         current_local = _take_local_snapshot(game_id, game)
-        if _is_true_conflict(last_snapshot, current_remote, last_local, current_local):
+        remote_changed = (
+            _snapshots_differ(last_snapshot, current_remote)
+            or bool(set(current_remote) - set(last_snapshot))
+        )
+        local_changed = (
+            _snapshots_differ(last_local, current_local)
+            or bool(set(current_local) - set(last_local))
+        )
+        if remote_changed and local_changed:
             return "conflict", current_remote
 
     return "clean", current_remote
