@@ -859,32 +859,41 @@ def cmd_install_decky(args):
 
 def cmd_update(args):
     """Update ExternalGameSync to the latest version from GitHub."""
+    import json
     import shutil
     import tarfile
     import tempfile
     import urllib.request
 
-    TARBALL_URL = "https://github.com/pmahern/steamexternalgamesync/archive/refs/heads/master.tar.gz"
+    API_URL = "https://api.github.com/repos/pmahern/steamexternalgamesync/releases/latest"
 
-    print("Downloading latest version from GitHub...")
+    print("Fetching latest release info from GitHub...")
+    try:
+        with urllib.request.urlopen(API_URL) as resp:
+            release = json.loads(resp.read())
+        tarball_url = release["tarball_url"]
+        tag = release.get("tag_name", "latest")
+        print(f"Downloading version {tag}...")
+    except Exception as e:
+        print(f"Could not fetch release info: {e}")
+        sys.exit(1)
+
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            tarball = os.path.join(tmp, "master.tar.gz")
-            urllib.request.urlretrieve(TARBALL_URL, tarball)
+            tarball = os.path.join(tmp, "release.tar.gz")
+            urllib.request.urlretrieve(tarball_url, tarball)
 
             print("Extracting...")
             with tarfile.open(tarball, "r:gz") as tf:
                 tf.extractall(tmp)
 
-            # The tarball extracts to externalgamesync-master/
-            extracted = os.path.join(tmp, "externalgamesync-master")
-            if not os.path.isdir(extracted):
-                # Fallback: find any extracted dir
-                subdirs = [d for d in os.listdir(tmp) if os.path.isdir(os.path.join(tmp, d)) and d != "__MACOSX"]
-                if not subdirs:
-                    print("Could not find extracted directory.")
-                    sys.exit(1)
-                extracted = os.path.join(tmp, subdirs[0])
+            # Release tarballs extract to <owner>-<repo>-<sha>/
+            subdirs = [d for d in os.listdir(tmp)
+                       if os.path.isdir(os.path.join(tmp, d)) and d != "__MACOSX"]
+            if not subdirs:
+                print("Could not find extracted directory.")
+                sys.exit(1)
+            extracted = os.path.join(tmp, subdirs[0])
 
             if sys.platform == "win32":
                 installer = os.path.join(extracted, "install.ps1")

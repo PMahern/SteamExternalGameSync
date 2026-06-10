@@ -10,24 +10,6 @@ This project was developed with extensive AI assistance under my direction and r
 
 ---
 
-## Quick Install
-
-**Linux / SteamOS / Steam Deck** — paste into a terminal:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/pmahern/steamexternalgamesync/master/download-install.sh | bash
-```
-
-**Windows** — paste into PowerShell or Command Prompt:
-
-```
-powershell -c "iex (iwr 'https://raw.githubusercontent.com/pmahern/steamexternalgamesync/master/download-install.ps1' -UseBasicParsing).Content"
-```
-
-Both commands download the latest release from GitHub, extract it without touching disk in a way that triggers SmartScreen, and run the installer. Python 3 must already be installed on Windows ([python.org/downloads](https://www.python.org/downloads/) — check "Add Python to PATH").
-
----
-
 ## What it does
 
 - **Automatic save sync on launch and exit** — before a game starts, the latest saves are pulled from the cloud; after you quit, they're pushed back. You just play; the syncing happens in the background.
@@ -49,9 +31,27 @@ Both commands download the latest release from GitHub, extract it without touchi
 
 ---
 
-## Install
+## Quick Install
 
-For first-time setup, use the [Quick Install](#quick-install) one-liner above. If you prefer to clone the repo manually:
+**Linux / SteamOS / Steam Deck** — paste into a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pmahern/steamexternalgamesync/master/download-install.sh | bash
+```
+
+**Windows** — paste into PowerShell or Command Prompt:
+
+```
+powershell -c "iex (iwr 'https://raw.githubusercontent.com/pmahern/steamexternalgamesync/master/download-install.ps1' -UseBasicParsing).Content"
+```
+
+Both commands download the latest release from GitHub, extract it without touching disk in a way that triggers SmartScreen, and run the installer. Python 3 must already be installed on Windows ([python.org/downloads](https://www.python.org/downloads/) — check "Add Python to PATH").
+
+---
+
+## Git Dowload and Install
+
+If you prefer to clone the repo manually you can simply clone it then run install.sh:
 
 ```bash
 git clone https://github.com/pmahern/externalgamesync
@@ -62,18 +62,9 @@ bash install.sh          # Linux
 
 No root required. Everything installs to `~/.local/` on Linux or `%LOCALAPPDATA%\ExternalGameSync` on Windows.
 
----
-
-## Quick start
-
-```bash
-externalgamesync gui
-# or find "ExternalGameSync" in your app menu
-```
-
----
-
 ## Setup walkthrough
+
+Launch the management interface by entering externalgamesync gui in the commandline or finding externalgamesync in your app menu/start menu.
 
 ### 1. Cloud storage setup
 
@@ -94,7 +85,7 @@ The setup wizard creates and tests the rclone remote, then pulls `games.json` fr
 
 ### 2. Getting a game into Steam / Proton (Linux)
 
-Before syncing, the game needs to exist as a non-Steam shortcut so Proton can run it. If it's already in Steam, skip to step 3.
+Before syncing, the game needs to exist in Steam. If it's a Steam native game then just install it as you normally would on either Window or Linux. If it's already in Steam, skip to step 3.
 
 **Install Game** (sidebar) handles this end-to-end:
 
@@ -104,7 +95,7 @@ Before syncing, the game needs to exist as a non-Steam shortcut so Proton can ru
 
 ![Selecting proton prefix](docs/examples/install_2.png)
 
-2. Pick the Proton version to use.
+2. Pick the Proton version to use (typically the latest non hotfix or expiermental is a safe bet. It's worth trying Experimental if a game is unstable or won't start.)
 
 ExternalGameSync shuts Steam down, writes the shortcut and Proton mapping to `shortcuts.vdf` / `config.vdf`, then relaunches Steam and queues the installer to run automatically. Complete the installation — keep the default install folder to make things easier later.
 
@@ -114,50 +105,66 @@ On **Windows**, install the game normally first — run its installer, or instal
 
 ### 3. Creating a sync config for a game
 
-Use **Add New Game Config** (sidebar):
+To setup syncing for a game for the first time, you need to define a configuration for it. This gives it an id that ExternalGameSync uses to track the saves files for and allows you to define a default save folder for other systems that you plan on syncing your saves yoo. 
+
+Click **Add New Game Config** (sidebar):
+
+![Select game type](docs/examples/create_1.png)
 
 **Step 1 — Game type**
 Choose how the game is installed:
 
-- **Non-Steam Shortcut** — a game you added to Steam manually via Games > Add a Non-Steam Game. It runs in its own Proton prefix, separate from any Steam purchase.
+- **Non-Steam Shortcut** — a game you added to Steam manually via Games > Add a Non-Steam Game. It runs in its own Proton prefix (on Linux), separate from any Steam purchase.
 - **Native Steam Game** — a game you bought on Steam that lacks working cloud saves (e.g. Dead Space 2). It uses the game's own Steam App ID and Proton prefix. After selecting this path, pick the game from the list of installed Steam games.
 
 > **Steam Cloud conflict warning (native Steam only)**
-> If the game has any Steam Cloud support at all, ExternalGameSync and Steam Cloud managing the same saves will cause conflicts on every launch. Before continuing, disable Steam Cloud for the game: right-click in Steam > Properties > General, then uncheck "Keep game saves in the Steam Cloud."
+> If the game has any Steam Cloud support at all, ExternalGameSync and Steam Cloud managing the same saves will cause conflicts on every launch. Before continuing, disable Steam Cloud for the game if you really want to use this tool for it, although it's recommended you only use this tool for games that have no Steam Cloud save support. To disable cloud saves for a game right-click on it in Steam > Properties > General, then uncheck "Keep game saves in the Steam Cloud."
 
-**Step 2 — Name and prefix / App ID**
+![Select Steam shortcut](docs/examples/create_2.png)
+
+**Step 2 — Select Steam shortcut**
+Select the Steam shortcut for the game you want to setup cloud syncing. If you just installed it using the install tool the name should match what you entered in that step.
+
+![Select Proton prefix](docs/examples/create_3.png)
+
+**Step 3 — Name and prefix / App ID**
 Confirm or edit the display name.
-- *Non-Steam shortcut*: on Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top.
+- *Non-Steam shortcut*: on Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top. THe app will show you what non default folders exist in a select Proton prefix to help find the one that has your installed game.
 - *Native Steam game*: the App ID is shown read-only (it's the game's real Steam App ID); no prefix selection needed.
 
-**Step 3 — Find in game database (optional)**
+![Select Proton prefix](docs/examples/create_4.png)
+
+**Step 4 — Find in game database (optional)**
 Search the ludusavi community manifest for auto-detected save paths (see [Ludusavi manifest integration](#ludusavi-manifest-integration) below).
 
-**Step 4 — Paths and options**
+![Final setup](docs/examples/create_5.png)
+
+**Step 5 — Paths and options (final step)**
 
 | Field | What to enter |
 |---|---|
-| Executable | The main game `.exe`. For non-Steam shortcuts on Linux, browse inside the Proton prefix — the GUI opens directly in `Program Files`. For native Steam games on Linux, the exe is provided by Steam at launch and no path is needed. |
-| Save folder | The folder that holds save files. On Linux, browse inside the Proton prefix — the GUI opens in `AppData/Roaming`. It's OK if the folder doesn't exist yet; it will be created the first time you save. Check PCGamingWiki if unsure. |
+| Executable | The main game `.exe`. For non-Steam shortcuts on Linux, browse inside the Proton prefix — the GUI opens directly in `Program Files`, wiuth any luck the app will be able to find what it thinks is the exe based on the ludusavie database or using a fuzzy match heuristic based on the name of the shortcut. For native Steam games on Linux, the exe is provided by Steam at launch and no path is needed. |
+| Save folder | The folder that holds save files. On Linux, browse inside the Proton prefix — the GUI opens in `AppData/Roaming`. It's OK if the folder doesn't exist yet; it will be created the first time you save. If a save path was found in Ludusavi's database, it will shown in a button, clicking the button will copy it to the actual text box. Otherwise check PCGamingWiki for save paths for games if they're not found with Ludusavi. |
 | Env vars | Optional environment variables for launch (e.g. `DXVK_ASYNC=1`). Linux only. |
 | Save filter | Optional rclone glob to sync only part of the save folder. Leave blank to sync the entire folder. |
-| Disc image | Optional path to an `.iso` to auto-mount via udisksctl before launch and unmount after. Useful for older games that check for a disc — the original Elder Scrolls: Oblivion is one example. |
+| Disc image | Optional path to an `.iso` to auto-mount via udisksctl before launch and unmount after. Useful for older games that check for a disc — the original Elder Scrolls: Oblivion for example. This typically won't work with games that use SecureROM or other more obnoxious disc checkers. |
 
 **When to use Save filter**
 
-Some games store saves inside their own install folder, alongside executables and data files. System Shock 2 (GOG) is a real example: each save slot is a subfolder named `save_0`, `save_1`, etc. inside the game root. Its config:
+Some games store saves inside their own install folder, alongside executables and data files. System Shock 2 is an example of a game that does this, each save slot is a subfolder named `save_0`, `save_1`, etc. inside the game root. A config that would get around this would have the following configuration:
 
 ```
 save_path:   GOG Games/System Shock 2
 save_filter: save_*/**
 ```
 
-Setting the save folder to the game root without a filter would sync hundreds of megs of game data on every launch. The filter `save_*/**` tells rclone to only transfer files inside folders whose names start with `save_`.
+Setting the save folder to the game root without a filter would sync the entire root directory including game data, binaries, etc. This could lead to hundreds of megs being synced on every launch. The filter `save_*/**` tells rclone to only transfer files inside folders whose names start with `save_`.
 
 Clicking **Configure** will:
 - Save the game config to `games.json` and push it to cloud storage
 - Create the save symlink in `~/ExternalGameSync/saves/<game_id>/` (Linux)
 - Run an initial pull + push to establish the baseline
+- Push any custom artwork assigned to the game
 - Rewrite the Steam shortcut's Launch Options (non-Steam shortcut) or the game's Steam Launch Options (native Steam) to use the sync wrapper and pre-launcher
 
 Restart Steam when prompted for the Launch Options change to take effect.
@@ -166,24 +173,35 @@ Restart Steam when prompted for the Launch Options change to take effect.
 
 ### 4. Assigning the same game on another machine
 
-On the second machine, run setup if you haven't already (step 1), then use **Assign Config** (sidebar):
+On the second machine, run setup if you haven't already (step 1) and then install the game (step 2), then use **Assign Config** (sidebar):
+
+![Select game configuration](docs/examples/assign_1.png)
 
 **Step 1 — Pick game**
-The GUI lists all games from `games.json`. Use the search box to filter by name. Select the game you want to assign.
+The GUI lists all games from `games.json` that's stored on your cloud provider. Use the search box to filter by name. Your config you just created should show up in this list. Select the game you want to assign.
+
+![Select game type](docs/examples/assign_2.png)
 
 **Step 2 — Installation type**
-Choose how the game is installed on this machine:
+Choose how the game is installed on this machine, typically the same option you chose in the Add Game process above:
 
 - **Non-Steam Shortcut** — if the game was added to Steam manually here. Select the matching shortcut from the list. If the game isn't in Steam yet, install it and add it as a non-Steam shortcut first (step 2 above).
 - **Native Steam Game** — if the game is a Steam purchase on this machine too. The GUI shows your installed Steam games; select the matching entry to fill the App ID automatically, or type it in directly. The same Steam Cloud warning from step 3 applies — disable Steam Cloud for the game before proceeding.
 
-**Step 3 — Confirm paths**
+![Select Steam shortcut](docs/examples/assign_3.png)
+
+**Step 3 — Name and prefix / App ID**
+Select the steam shortcut for the game you want to setup cloud syncing. This is the same process as you did in the Add Game section up above.
+
+![Final setup](docs/examples/assign_4.png)
+
+**Step 4 — Confirm paths (Final Step)**
 The GUI resolves exe and save paths from the shared config.
 - *Non-Steam shortcut*: tries to auto-detect the Proton prefix by scanning recently modified prefixes for the game's exe. On Linux, only the prefix App ID is stored in the local config — paths are re-derived from the shared config at runtime. On Windows, absolute paths are stored locally because they vary by username and install location.
 - *Native Steam game on Linux*: the save path is resolved automatically from the App ID; no exe path is needed (Steam provides it at launch).
 
 Clicking **Assign** will:
-- Register this machine in the local config and push the updated `games.json`
+- Register this machine in the local config and push the updated `games.json` (if any changes were made).
 - Create the save symlink (Linux) or record the save path (Windows)
 - Run an initial sync
 - Rewrite the Steam shortcut Launch Options (non-Steam shortcut) or the game's Steam Launch Options (native Steam)
@@ -198,10 +216,40 @@ After a software update, use **Update All Configured Shortcuts** (at the top of 
 ```bash
 externalgamesync update-shortcuts
 ```
+---
+
+## Decky Loader plugin (Gaming Mode / SteamOS)
+
+The `decky_plugin/` directory contains a [Decky Loader](https://decky.xyz) plugin that exposes save syncing directly from the Steam Deck's Gaming Mode quick-access menu, without needing to switch to Desktop Mode. Because the syncing is resolved on game launch with custom scripts and the pre-launcher, this plugin is not strictly neccessary and is more of a nice to have, giving you immediate feedback about the current cloud status of a game without having to start it.  If you're not using Steam OS/Bazzite or Big Picture mode you can just rely on the pre launcher to handle the syncing.
+
+### What it does
+
+- Lists all games assigned to the current machine with per-game sync status (in sync, cloud ahead, local ahead, conflict, offline)
+- **Sync All** button — syncs every assigned game sequentially with live per-game status updates
+- **Per-game sync** button — sync a single game on demand
+- **Conflict resolution** — when a conflict is detected, Keep Local / Keep Cloud buttons appear; resolving overwrites the losing side and pushes the winner
+- **Background polling** — optionally checks sync status every 5 minutes while no game is running, this way the application can know if you have newer saves up on the cloud but become disconnected later and can't sync
+- **Auto-pull on poll** — when background polling is enabled, can automatically pull saves when the cloud is ahead and no conflict is detected; toggle independently from polling
+- **Game page status bar** — sync status is injected into each game's Steam library page; tapping an actionable status (cloud ahead, local ahead, conflict) triggers an immediate sync or opens the conflict dialog
+
+![Game save manager](docs/examples/plugin_manager.png)
+THe game save manager
+![Game details](docs/examples/plugin_game_details.png)
+Game detail screen with sync status
+
+### Installing the plugin
+
+```bash
+externalgamesync install-decky
+```
+
+Or manually copy `decky_plugin/` to `~/homebrew/plugins/ExternalGameSync/` and restart Decky.
+
+The pre-built frontend (`dist/index.js`) is included in the repo, so no Node.js build step is required unless you modify the frontend source.
 
 ---
 
-## How the Steam hook works
+## Technical Details
 
 ### Overview
 
@@ -241,8 +289,6 @@ Steam starts the Proton session
 
 wrapper.sh sees game exit, waits for push handler, exits
 ```
-
-The pre-launch and post-game dialogs each use a single persistent window that updates its content in-place — there's no flickering from multiple popups opening and closing.
 
 ### IPC files
 
@@ -320,7 +366,6 @@ ExternalGameSync/                   <- root on your cloud storage remote
 }
 ```
 
-
 ### Local machine config
 
 Each machine stores its own config at:
@@ -351,30 +396,6 @@ On Windows, absolute exe and save paths are also stored since they vary by usern
 ```
 
 ---
-
-## Decky Loader plugin (Gaming Mode / SteamOS)
-
-The `decky_plugin/` directory contains a [Decky Loader](https://decky.xyz) plugin that exposes save syncing directly from the Steam Deck's Gaming Mode quick-access menu, without needing to switch to Desktop Mode.
-
-### What it does
-
-- Lists all games assigned to the current machine with per-game sync status (in sync, cloud ahead, local ahead, conflict, offline)
-- **Sync All** button — syncs every assigned game sequentially with live per-game status updates
-- **Per-game sync** button — sync a single game on demand
-- **Conflict resolution** — when a conflict is detected, inline Keep Local / Keep Cloud buttons appear; resolving overwrites the losing side and pushes the winner
-- **Background polling** — optionally checks sync status every 5 minutes while no game is running
-- **Auto-pull on poll** — when background polling is enabled, can automatically pull saves when the cloud is ahead and no conflict is detected; toggle independently from polling
-- **Game page status bar** — sync status is injected into each game's Steam library page; tapping an actionable status (cloud ahead, local ahead, conflict) triggers an immediate sync or opens the conflict dialog
-
-### Installing the plugin
-
-```bash
-externalgamesync install-decky
-```
-
-Or manually copy `decky_plugin/` to `~/homebrew/plugins/ExternalGameSync/` and restart Decky.
-
-The pre-built frontend (`dist/index.js`) is included in the repo, so no Node.js build step is required unless you modify the frontend source.
 
 ### Building the frontend
 
