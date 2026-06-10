@@ -207,8 +207,6 @@ Clicking **Assign** will:
 - Rewrite the Steam shortcut Launch Options (non-Steam shortcut) or the game's Steam Launch Options (native Steam)
 - Download any artwork stored on the cloud for the game
 
-![Final setup](docs/examples/assign_4.png)
-
 Restart Steam when prompted.
 
 **Updating all shortcuts at once**
