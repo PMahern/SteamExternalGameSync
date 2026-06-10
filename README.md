@@ -89,13 +89,15 @@ Before syncing, the game needs to exist in Steam. If it's a Steam native game th
 
 **Install Game** (sidebar) handles this end-to-end:
 
-![Selecting installer exe](docs/examples/install_1.png)
+
 
 1. Enter a display name and browse to the Windows `.exe` installer for the game.
 
-![Selecting proton prefix](docs/examples/install_2.png)
+![Selecting installer exe](docs/examples/install_1.png)
 
 2. Pick the Proton version to use (typically the latest non hotfix or expiermental is a safe bet. It's worth trying Experimental if a game is unstable or won't start.)
+
+![Selecting proton prefix](docs/examples/install_2.png)
 
 ExternalGameSync shuts Steam down, writes the shortcut and Proton mapping to `shortcuts.vdf` / `config.vdf`, then relaunches Steam and queues the installer to run automatically. Complete the installation — keep the default install folder to make things easier later.
 
@@ -105,11 +107,9 @@ On **Windows**, install the game normally first — run its installer, or instal
 
 ### 3. Creating a sync config for a game
 
-To setup syncing for a game for the first time, you need to define a configuration for it. This gives it an id that ExternalGameSync uses to track the saves files for and allows you to define a default save folder for other systems that you plan on syncing your saves yoo. 
+To setup syncing for a game for the first time, you need to define a configuration for it. This gives it an id that ExternalGameSync uses to track the saves files for and allows you to define a default save folder for other systems that you plan on syncing your saves to. 
 
 Click **Add New Game Config** (sidebar):
-
-![Select game type](docs/examples/create_1.png)
 
 **Step 1 — Game type**
 Choose how the game is installed:
@@ -117,27 +117,27 @@ Choose how the game is installed:
 - **Non-Steam Shortcut** — a game you added to Steam manually via Games > Add a Non-Steam Game. It runs in its own Proton prefix (on Linux), separate from any Steam purchase.
 - **Native Steam Game** — a game you bought on Steam that lacks working cloud saves (e.g. Dead Space 2). It uses the game's own Steam App ID and Proton prefix. After selecting this path, pick the game from the list of installed Steam games.
 
+![Select game type](docs/examples/create_1.png)
+
 > **Steam Cloud conflict warning (native Steam only)**
 > If the game has any Steam Cloud support at all, ExternalGameSync and Steam Cloud managing the same saves will cause conflicts on every launch. Before continuing, disable Steam Cloud for the game if you really want to use this tool for it, although it's recommended you only use this tool for games that have no Steam Cloud save support. To disable cloud saves for a game right-click on it in Steam > Properties > General, then uncheck "Keep game saves in the Steam Cloud."
-
-![Select Steam shortcut](docs/examples/create_2.png)
 
 **Step 2 — Select Steam shortcut**
 Select the Steam shortcut for the game you want to setup cloud syncing. If you just installed it using the install tool the name should match what you entered in that step.
 
-![Select Proton prefix](docs/examples/create_3.png)
+![Select Steam shortcut](docs/examples/create_2.png)
 
 **Step 3 — Name and prefix / App ID**
 Confirm or edit the display name.
 - *Non-Steam shortcut*: on Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top. THe app will show you what non default folders exist in a select Proton prefix to help find the one that has your installed game.
 - *Native Steam game*: the App ID is shown read-only (it's the game's real Steam App ID); no prefix selection needed.
 
-![Select Proton prefix](docs/examples/create_4.png)
+![Select Proton prefix](docs/examples/create_3.png)
 
 **Step 4 — Find in game database (optional)**
 Search the ludusavi community manifest for auto-detected save paths (see [Ludusavi manifest integration](#ludusavi-manifest-integration) below).
 
-![Final setup](docs/examples/create_5.png)
+![Select Proton prefix](docs/examples/create_4.png)\
 
 **Step 5 — Paths and options (final step)**
 
@@ -148,6 +148,8 @@ Search the ludusavi community manifest for auto-detected save paths (see [Ludusa
 | Env vars | Optional environment variables for launch (e.g. `DXVK_ASYNC=1`). Linux only. |
 | Save filter | Optional rclone glob to sync only part of the save folder. Leave blank to sync the entire folder. |
 | Disc image | Optional path to an `.iso` to auto-mount via udisksctl before launch and unmount after. Useful for older games that check for a disc — the original Elder Scrolls: Oblivion for example. This typically won't work with games that use SecureROM or other more obnoxious disc checkers. |
+
+![Final setup](docs/examples/create_5.png)
 
 **When to use Save filter**
 
@@ -175,25 +177,23 @@ Restart Steam when prompted for the Launch Options change to take effect.
 
 On the second machine, run setup if you haven't already (step 1) and then install the game (step 2), then use **Assign Config** (sidebar):
 
-![Select game configuration](docs/examples/assign_1.png)
-
 **Step 1 — Pick game**
 The GUI lists all games from `games.json` that's stored on your cloud provider. Use the search box to filter by name. Your config you just created should show up in this list. Select the game you want to assign.
 
-![Select game type](docs/examples/assign_2.png)
+![Select game configuration](docs/examples/assign_1.png)
 
 **Step 2 — Installation type**
 Choose how the game is installed on this machine, typically the same option you chose in the Add Game process above:
 
+![Select game type](docs/examples/assign_2.png)
+
 - **Non-Steam Shortcut** — if the game was added to Steam manually here. Select the matching shortcut from the list. If the game isn't in Steam yet, install it and add it as a non-Steam shortcut first (step 2 above).
 - **Native Steam Game** — if the game is a Steam purchase on this machine too. The GUI shows your installed Steam games; select the matching entry to fill the App ID automatically, or type it in directly. The same Steam Cloud warning from step 3 applies — disable Steam Cloud for the game before proceeding.
-
-![Select Steam shortcut](docs/examples/assign_3.png)
 
 **Step 3 — Name and prefix / App ID**
 Select the steam shortcut for the game you want to setup cloud syncing. This is the same process as you did in the Add Game section up above.
 
-![Final setup](docs/examples/assign_4.png)
+![Select Steam shortcut](docs/examples/assign_3.png)
 
 **Step 4 — Confirm paths (Final Step)**
 The GUI resolves exe and save paths from the shared config.
@@ -206,6 +206,8 @@ Clicking **Assign** will:
 - Run an initial sync
 - Rewrite the Steam shortcut Launch Options (non-Steam shortcut) or the game's Steam Launch Options (native Steam)
 - Download any artwork stored on the cloud for the game
+
+![Final setup](docs/examples/assign_4.png)
 
 Restart Steam when prompted.
 
