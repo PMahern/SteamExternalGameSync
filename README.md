@@ -95,7 +95,7 @@ Before syncing, the game needs to exist in Steam. If it's a Steam native game th
 
 ![Selecting installer exe](docs/examples/install_1.png)
 
-2. Pick the Proton version to use (typically the latest non hotfix or expiermental is a safe bet. It's worth trying Experimental if a game is unstable or won't start.)
+2. Pick the Proton version to use (typically the latest non hotfix or experimental is a safe bet. It's worth trying experimental if a game is unstable or won't start.)
 
 ![Selecting proton prefix](docs/examples/install_2.png)
 
@@ -129,7 +129,7 @@ Select the Steam shortcut for the game you want to setup cloud syncing. If you j
 
 **Step 3 — Name and prefix / App ID**
 Confirm or edit the display name.
-- *Non-Steam shortcut*: on Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top. THe app will show you what non default folders exist in a select Proton prefix to help find the one that has your installed game.
+- *Non-Steam shortcut*: on Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top. The app will show you what non default folders exist in a select Proton prefix to help find the one that has your installed game.
 - *Native Steam game*: the App ID is shown read-only (it's the game's real Steam App ID); no prefix selection needed.
 
 ![Select Proton prefix](docs/examples/create_3.png)
@@ -228,16 +228,13 @@ The `decky_plugin/` directory contains a [Decky Loader](https://decky.xyz) plugi
 
 - Lists all games assigned to the current machine with per-game sync status (in sync, cloud ahead, local ahead, conflict, offline)
 - **Sync All** button — syncs every assigned game sequentially with live per-game status updates
+![Game save manager](docs/examples/plugin_manager.png)
 - **Per-game sync** button — sync a single game on demand
 - **Conflict resolution** — when a conflict is detected, Keep Local / Keep Cloud buttons appear; resolving overwrites the losing side and pushes the winner
 - **Background polling** — optionally checks sync status every 5 minutes while no game is running, this way the application can know if you have newer saves up on the cloud but become disconnected later and can't sync
 - **Auto-pull on poll** — when background polling is enabled, can automatically pull saves when the cloud is ahead and no conflict is detected; toggle independently from polling
 - **Game page status bar** — sync status is injected into each game's Steam library page; tapping an actionable status (cloud ahead, local ahead, conflict) triggers an immediate sync or opens the conflict dialog
-
-![Game save manager](docs/examples/plugin_manager.png)
-THe game save manager
 ![Game details](docs/examples/plugin_game_details.png)
-Game detail screen with sync status
 
 ### Installing the plugin
 
