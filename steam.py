@@ -722,6 +722,19 @@ fi
 # Start push handler in background — waits for PUSH_START_FILE.
 _push_handler &
 
+# On non-gamescope desktop Linux + Proton: run the native pre-launcher as a
+# background input relay.  It reads controller events via Linux SDL (which can
+# see evdev devices) and forwards them via IPC file so pre-launcher.exe can poll
+# them from inside Wine.  On SteamOS/Bazzite (gamescope), XInput works natively
+# so the relay is skipped.
+_INPUT_RELAY_PID=""
+if [ "$_NATIVE_PRELAUNCHER" -eq 1 ] && [ -n "$PRELAUNCHER_NATIVE" ] && \\
+   [ -f "$PRELAUNCHER_NATIVE" ] && [ -z "${{GAMESCOPE_WAYLAND_DISPLAY:-}}" ]; then
+    "$PRELAUNCHER_NATIVE" input-relay &
+    _INPUT_RELAY_PID=$!
+    "$SAVESYNC" log "[wrapper] input relay started pid=$_INPUT_RELAY_PID"
+fi
+
 # === Launch flow ===
 # FLOW 1 — Proton pre-launcher.exe (native Steam Proton or Proton shortcut):
 #   pre-launcher.exe is spliced into the Proton verb chain; it handles sync UI,
@@ -737,6 +750,7 @@ if [ "$_NATIVE_PRELAUNCHER" -eq 1 ]; then
     # FLOW 1: Proton pre-launcher.exe embedded in command chain
     "${{_LAUNCH_CMD[@]}}"
     LAUNCH_RC=$?
+    [ -n "$_INPUT_RELAY_PID" ] && kill "$_INPUT_RELAY_PID" 2>/dev/null && _INPUT_RELAY_PID=""
     "$SAVESYNC" log "[wrapper] Proton launch exited rc=$LAUNCH_RC"
     # Fallback: ensure push runs if pre-launcher.exe crashed without signalling
     [ ! -f "$CANCEL_FILE" ] && touch "$PUSH_START_FILE"
@@ -1062,7 +1076,7 @@ def update_shortcut_launch(
             else:
                 app_id = mc.get("app_id") if mc else None
                 prelauncher_win    = _install_prelauncher(str(app_id)) if app_id else None
-                prelauncher_native = ""
+                prelauncher_native = _ensure_prelauncher_native()
 
             wrapper_path = _write_launch_wrapper(
                 game_name, savesync_bin,
@@ -1346,7 +1360,7 @@ def update_native_game_launch(
                 compatdata / "pfx" / "drive_c" / "users" / "steamuser"
                 / "AppData" / "Local" / "ExternalGameSync" / "pre-launcher.exe"
             ) if compatdata else ""
-            prelauncher_native = ""
+            prelauncher_native = _ensure_prelauncher_native()
         wrapper_path = _write_launch_wrapper(
             game_name, savesync_bin,
             game_id=game_id, game_exe_win=game_exe_win, disc_image=disc_image,
