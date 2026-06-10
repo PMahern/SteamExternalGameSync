@@ -85,9 +85,9 @@ The setup wizard creates and tests the rclone remote, then pulls `games.json` fr
 
 ### 2. Getting a game into Steam / Proton (Linux)
 
-Before syncing, the game needs to exist in Steam. If it's a Steam native game then just install it as you normally would on either Window or Linux. If it's already in Steam, skip to step 3.
+Before syncing, the game needs to exist in Steam. If it's a Steam native game then just install it as you normally would on either Windows or Linux. If it's already in Steam, skip to step 3.
 
-**Install Game** (sidebar) handles this end-to-end:
+**Install Game** (sidebar) handles installation into a Proton prefix:
 
 
 
@@ -95,7 +95,7 @@ Before syncing, the game needs to exist in Steam. If it's a Steam native game th
 
 ![Selecting installer exe](docs/examples/install_1.png)
 
-2. Pick the Proton version to use (typically the latest non hotfix or experimental is a safe bet. It's worth trying experimental if a game is unstable or won't start.)
+2. Pick the Proton version to use, typically the latest non hotfix or experimental is a safe bet. It's worth trying experimental if a game is unstable or won't start.
 
 ![Selecting proton prefix](docs/examples/install_2.png)
 
@@ -129,7 +129,7 @@ Select the Steam shortcut for the game you want to setup cloud syncing. If you j
 
 **Step 3 — Name and prefix / App ID**
 Confirm or edit the display name.
-- *Non-Steam shortcut*: on Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top. The app will show you what non default folders exist in a select Proton prefix to help find the one that has your installed game.
+- *Non-Steam shortcut*: on Linux, the GUI tries to auto-detect the correct Proton prefix (App ID) from the shortcut's exe path — you can also pick it from the list of installed prefixes. Prefixes are listed newest first, so a freshly installed game should be at the top. The app will show you what non default folders exist in a selected Proton prefix to help find the one that has your installed game.
 - *Native Steam game*: the App ID is shown read-only (it's the game's real Steam App ID); no prefix selection needed.
 
 ![Select Proton prefix](docs/examples/create_3.png)
@@ -137,7 +137,7 @@ Confirm or edit the display name.
 **Step 4 — Find in game database (optional)**
 Search the ludusavi community manifest for auto-detected save paths (see [Ludusavi manifest integration](#ludusavi-manifest-integration) below).
 
-![Select Proton prefix](docs/examples/create_4.png)\
+![Select Proton prefix](docs/examples/create_4.png)
 
 **Step 5 — Paths and options (final step)**
 

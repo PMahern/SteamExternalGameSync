@@ -747,9 +747,30 @@ LAUNCH_RC=0
 _CANCELLED=0
 
 if [ "$_NATIVE_PRELAUNCHER" -eq 1 ]; then
-    # FLOW 1: Proton pre-launcher.exe embedded in command chain
-    "${{_LAUNCH_CMD[@]}}"
+    # FLOW 1: Proton pre-launcher.exe embedded in command chain.
+    # Run Proton in the background so we can watch for cancellation and force-kill
+    # wineserver if it doesn't exit promptly — otherwise Steam thinks the game is
+    # still running on desktops where Wine cleanup is slow (e.g. Linux Mint).
+    "${{_LAUNCH_CMD[@]}}" &
+    _PROTON_PID=$!
+
+    # Watcher: once cancel is detected, give Wine a short grace period then force it out.
+    ( while kill -0 "$_PROTON_PID" 2>/dev/null; do
+          if [ -f "$CANCEL_FILE" ]; then
+              sleep 3
+              kill -0 "$_PROTON_PID" 2>/dev/null && \
+                  [ -n "$STEAM_COMPAT_DATA_PATH" ] && \
+                  WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx" wineserver -k 2>/dev/null || true
+              break
+          fi
+          sleep 0.5
+      done
+    ) &
+    _WATCHER_PID=$!
+
+    wait $_PROTON_PID
     LAUNCH_RC=$?
+    kill "$_WATCHER_PID" 2>/dev/null; wait "$_WATCHER_PID" 2>/dev/null || true
     [ -n "$_INPUT_RELAY_PID" ] && kill "$_INPUT_RELAY_PID" 2>/dev/null && _INPUT_RELAY_PID=""
     "$SAVESYNC" log "[wrapper] Proton launch exited rc=$LAUNCH_RC"
     # Fallback: ensure push runs if pre-launcher.exe crashed without signalling
