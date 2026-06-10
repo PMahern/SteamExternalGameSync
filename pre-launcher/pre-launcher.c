@@ -786,16 +786,100 @@ static void render(void)
 
 /* ── Controller ────────────────────────────────────────────────────────────── */
 
+#ifdef _WIN32
+/* Direct XInput polling — SDL2's gamecontroller layer returns 0 joysticks under
+ * Wine because Steam Input hasn't registered its virtual XInput device yet when
+ * the pre-launcher starts.  XInput was working in the GDI+ version, so we keep
+ * it as the authoritative controller path on Windows and ignore SDL's GC events. */
+
+#define XI_DPAD_UP    0x0001
+#define XI_DPAD_DOWN  0x0002
+#define XI_DPAD_LEFT  0x0004
+#define XI_DPAD_RIGHT 0x0008
+#define XI_START      0x0010
+#define XI_BACK       0x0020
+#define XI_BTN_A      0x1000
+#define XI_BTN_B      0x2000
+#define XI_BTN_Y      0x8000
+
+typedef struct { DWORD pkt; WORD btns; BYTE ltrig, rtrig; SHORT lx, ly, rx, ry; } XI_STATE;
+typedef DWORD (WINAPI *PFN_XInputGetState)(DWORD, XI_STATE *);
+static PFN_XInputGetState g_xinput = NULL;
+static WORD g_xi_prev[4] = {0};
+
+static void xinput_init(void)
+{
+    static const char *dlls[] = {
+        "xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll", NULL
+    };
+    for (int i = 0; dlls[i]; i++) {
+        HMODULE h = LoadLibraryA(dlls[i]);
+        if (!h) continue;
+        g_xinput = (PFN_XInputGetState)GetProcAddress(h, "XInputGetState");
+        if (g_xinput) { diag("xinput: loaded %s", dlls[i]); return; }
+    }
+    diag("xinput: not found");
+}
+
+static void handle_controller_button(SDL_GameControllerButton btn); /* forward decl */
+#ifdef _WIN32
+static void read_ipc_input(void); /* forward decl */
+#endif
+
+static void xinput_poll(void)
+{
+    if (!g_xinput) return;
+    static DWORD s_was_connected = 0; /* bitmask: which slots were connected last poll */
+    for (DWORD i = 0; i < 4; i++) {
+        XI_STATE st = {0};
+        DWORD rc = g_xinput(i, &st);
+        DWORD bit = (1u << i);
+        int connected = (rc == 0);
+        int was = (s_was_connected & bit) != 0;
+        if (connected && !was) {
+            diag("xinput slot %lu: CONNECTED", i);
+            s_was_connected |= bit;
+        } else if (!connected && was) {
+            diag("xinput slot %lu: DISCONNECTED rc=%lu", i, rc);
+            s_was_connected &= ~bit;
+        }
+        if (!connected) continue;
+        WORD pressed = (WORD)(st.btns & ~g_xi_prev[i]);
+        g_xi_prev[i] = st.btns;
+        if (pressed) diag("xinput slot %lu: pressed=0x%04x", i, pressed);
+        if (!pressed) continue;
+        if (pressed & XI_DPAD_LEFT)  handle_controller_button(SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+        if (pressed & XI_DPAD_RIGHT) handle_controller_button(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+        if (pressed & XI_DPAD_UP)    handle_controller_button(SDL_CONTROLLER_BUTTON_DPAD_UP);
+        if (pressed & XI_DPAD_DOWN)  handle_controller_button(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+        if (pressed & XI_START)      handle_controller_button(SDL_CONTROLLER_BUTTON_START);
+        if (pressed & XI_BTN_A)      handle_controller_button(SDL_CONTROLLER_BUTTON_A);
+        if (pressed & XI_BTN_B)      handle_controller_button(SDL_CONTROLLER_BUTTON_B);
+        if (pressed & XI_BTN_Y)      handle_controller_button(SDL_CONTROLLER_BUTTON_Y);
+    }
+}
+#endif /* _WIN32 */
+
 /* Open all connected controllers at startup, re-open on hotplug */
 #define MAX_CONTROLLERS 4
 static SDL_GameController *g_controllers[MAX_CONTROLLERS];
 
 static void controllers_open_all(void)
 {
-    for (int i = 0; i < SDL_NumJoysticks(); i++)
-        if (SDL_IsGameController(i) && i < MAX_CONTROLLERS)
-            if (!g_controllers[i])
-                g_controllers[i] = SDL_GameControllerOpen(i);
+    int n = SDL_NumJoysticks();
+    diag("controllers_open_all: %d joystick(s)", n);
+    for (int i = 0; i < n; i++) {
+        int is_gc = SDL_IsGameController(i);
+        diag("  joystick %d: is_game_controller=%d name=%s", i, is_gc,
+             SDL_JoystickNameForIndex(i) ? SDL_JoystickNameForIndex(i) : "(null)");
+        if (is_gc && i < MAX_CONTROLLERS && !g_controllers[i]) {
+            g_controllers[i] = SDL_GameControllerOpen(i);
+            if (g_controllers[i])
+                diag("  opened controller %d: %s", i, SDL_GameControllerName(g_controllers[i]));
+            else
+                diag("  SDL_GameControllerOpen(%d) failed: %s", i, SDL_GetError());
+        }
+    }
 }
 
 static void controllers_close_all(void)
@@ -885,6 +969,7 @@ static void handle_event(const SDL_Event *ev)
         break;
 
     case SDL_CONTROLLERBUTTONDOWN:
+        diag("SDL_CONTROLLERBUTTONDOWN btn=%d", ev->cbutton.button);
         handle_controller_button((SDL_GameControllerButton)ev->cbutton.button);
         break;
 
@@ -911,6 +996,11 @@ static void run_loop(void)
         /* drain any queued events */
         while (SDL_PollEvent(&ev))
             handle_event(&ev);
+
+#ifdef _WIN32
+        xinput_poll();
+        read_ipc_input();
+#endif
 
         /* IPC poll */
         if (g_poll_file[0] && poll_file_exists())
@@ -995,6 +1085,7 @@ static int run_pre_game(const EgsStatus *s0)
     }
 
     if (!window_open()) return 0;
+    controllers_open_all(); /* re-scan: some backends deliver after a window exists */
     if (!fonts_load()) diag("warning: fonts not loaded — text will not render");
     icon_load();
     bg_load();
@@ -1012,11 +1103,91 @@ static void run_post_game(void)
     set_poll_file("egs_push_done.txt");
     setup_pushing();
     if (!window_open()) return;
+    controllers_open_all(); /* re-scan: some backends deliver after a window exists */
     if (!fonts_load()) diag("warning: fonts not loaded");
     icon_load();
     bg_load();
     run_loop();
 }
+
+/* ── Windows-only: IPC input from Linux relay ─────────────────────────────── */
+
+#ifdef _WIN32
+/* Read button tokens written by the Linux input-relay process and dispatch them.
+ * Used on non-gamescope desktops where Wine/XInput can't see Steam virtual devices. */
+static void read_ipc_input(void)
+{
+    char path[4096]; ipc_path("egs_input.txt", path, sizeof(path));
+    static int s_logged = 0;
+    if (!s_logged) { diag("read_ipc_input path: %s", path); s_logged = 1; }
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[32];
+    char events[64][32]; int n = 0;
+    while (n < 64 && fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (line[0]) strncpy(events[n++], line, 31);
+    }
+    fclose(f);
+    file_delete(path);
+    if (n > 0) diag("read_ipc_input: %d token(s): %s...", n, events[0]);
+    for (int i = 0; i < n; i++) {
+        SDL_GameControllerButton btn = SDL_CONTROLLER_BUTTON_INVALID;
+        if      (!strcmp(events[i], "A"))     btn = SDL_CONTROLLER_BUTTON_A;
+        else if (!strcmp(events[i], "B"))     btn = SDL_CONTROLLER_BUTTON_B;
+        else if (!strcmp(events[i], "Y"))     btn = SDL_CONTROLLER_BUTTON_Y;
+        else if (!strcmp(events[i], "START")) btn = SDL_CONTROLLER_BUTTON_START;
+        else if (!strcmp(events[i], "LEFT"))  btn = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+        else if (!strcmp(events[i], "RIGHT")) btn = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+        else if (!strcmp(events[i], "UP"))    btn = SDL_CONTROLLER_BUTTON_DPAD_UP;
+        else if (!strcmp(events[i], "DOWN"))  btn = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+        if (btn != SDL_CONTROLLER_BUTTON_INVALID)
+            handle_controller_button(btn);
+    }
+}
+#endif /* _WIN32 */
+
+/* ── Linux-only: controller input relay for non-gamescope environments ─────── */
+
+#ifndef _WIN32
+/* Runs as a background process (pre-launcher input-relay).
+ * Reads controller events via Linux SDL and appends button tokens to egs_input.txt
+ * in the IPC dir so pre-launcher.exe can poll them from inside Wine. */
+static void run_input_relay(void)
+{
+    char input_path[4096]; ipc_path("egs_input.txt", input_path, sizeof(input_path));
+    SDL_GameControllerEventState(SDL_ENABLE);
+    controllers_open_all();
+    SDL_Event ev;
+    for (;;) {
+        if (!SDL_WaitEventTimeout(&ev, 200)) continue;
+        do {
+            if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
+                const char *tok = NULL;
+                switch (ev.cbutton.button) {
+                case SDL_CONTROLLER_BUTTON_A:          tok = "A";     break;
+                case SDL_CONTROLLER_BUTTON_B:          tok = "B";     break;
+                case SDL_CONTROLLER_BUTTON_Y:          tok = "Y";     break;
+                case SDL_CONTROLLER_BUTTON_START:      tok = "START"; break;
+                case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  tok = "LEFT";  break;
+                case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: tok = "RIGHT"; break;
+                case SDL_CONTROLLER_BUTTON_DPAD_UP:    tok = "UP";    break;
+                case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  tok = "DOWN";  break;
+                default: break;
+                }
+                if (tok) {
+                    FILE *f = fopen(input_path, "a");
+                    if (f) { fprintf(f, "%s\n", tok); fclose(f); }
+                }
+            } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                controllers_open_all();
+            } else if (ev.type == SDL_QUIT) {
+                return;
+            }
+        } while (SDL_PollEvent(&ev));
+    }
+}
+#endif /* !_WIN32 */
 
 /* ── Windows-only: launch and wait for the game process ───────────────────── */
 
@@ -1105,17 +1276,49 @@ static int run_wait(const char *exe)
 int main(int argc, char *argv[])
 {
     SDL_SetMainReady();
+
+#ifndef _WIN32
+    /* input-relay: lightweight background process — no video, no window.
+     * Must be handled before SDL_Init(VIDEO) to avoid creating a display connection. */
+    if (argc >= 2 && !strcmp(argv[1], "input-relay")) {
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+        SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+        SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
+        SDL_GameControllerEventState(SDL_ENABLE);
+        ipc_init();
+        run_input_relay();
+        controllers_close_all();
+        SDL_Quit();
+        return 0;
+    }
+#endif
+
+    /* Allow controller events regardless of window focus. */
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+#ifndef _WIN32
+    /* On Linux, HIDAPI is needed to see Steam's virtual gamepad in BPM.
+     * On Windows/Wine, Steam Input exposes XInput — HIDAPI can conflict. */
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+#endif
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
+    SDL_GameControllerEventState(SDL_ENABLE);
     TTF_Init();
 
     ipc_init();   /* must run before diag_open so /tmp/externalgamesync/ exists */
     diag_open();
+    diag("ipc_dir: %s", g_ipc_dir);
+    diag("SDL_GAMECONTROLLERCONFIG env: %s",
+         getenv("SDL_GAMECONTROLLERCONFIG") ? "(set)" : "(not set)");
 
     EgsStatus s = {0};
     read_status(&s);
     init_scale(s.fullscreen);
 
     controllers_open_all();
+
+#ifdef _WIN32
+    xinput_init();
+#endif
 
 #ifdef _WIN32
     /* Windows: always run the full flow (pre → game → post) */
@@ -1147,7 +1350,7 @@ int main(int argc, char *argv[])
     return exit_code;
 
 #else
-    /* Linux: two-phase invocation: pre | post */
+    /* Linux: pre | post  (input-relay is handled above before SDL video init) */
     const char *mode = (argc >= 2) ? argv[1] : "pre";
     diag("mode: %s", mode);
 

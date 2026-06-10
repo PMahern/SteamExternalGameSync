@@ -92,7 +92,7 @@ def _add_s1_shortcut():
         return
 
     clear_content()
-    add_header("Add New Game Config", "Step 1 -- Pick the Steam shortcut for this game")
+    add_header("Add New Game Config", "Step 2 -- Pick the Steam shortcut for this game")
 
     rows    = [[g["name"], g["exe"]] for g in ns_games]
     idx_map = {g["name"]: g for g in ns_games}
@@ -115,7 +115,7 @@ def _add_s1_shortcut():
 
 def _add_s1_native():
     clear_content()
-    add_header("Add New Game Config", "Step 1 -- Pick the installed Steam game")
+    add_header("Add New Game Config", "Step 2 -- Pick the installed Steam game")
 
     dpg.add_text(
         "Loading installed games...", tag="_native_loading",
@@ -180,7 +180,7 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
             linux_native = True
 
     clear_content()
-    subtitle = "Step 2 -- Game name"
+    subtitle = "Step 3 -- Game name"
     if linux_native:
         subtitle += " (native Linux app)"
     elif sys.platform != "win32" and not native_steam:
@@ -285,7 +285,7 @@ def _add_s2c_confirm_overwrite(ns_entry, shortcuts_data, vdf_path,
                                game_name: str, app_id: str, existing: dict,
                                native_steam: bool = False, linux_native: bool = False):
     clear_content()
-    add_header("Add New Game Config", "Step 3 -- Game already exists")
+    add_header("Add New Game Config", "Step 3b -- Game already exists")
 
     dpg.add_text(
         f"A game named \"{existing['name']}\" already exists in the cloud config.",
@@ -330,7 +330,7 @@ def _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
                       game_name: str, app_id: str, native_steam: bool = False,
                       linux_native: bool = False):
     clear_content()
-    add_header("Add New Game Config", "Step 3 -- Find in game database (optional)")
+    add_header("Add New Game Config", "Step 4 -- Find in game database (optional)")
     dpg.add_text(
         "Search the ludusavi community manifest to auto-detect save paths.",
         parent="content_group", color=(130, 130, 155), wrap=700,
@@ -567,7 +567,7 @@ def _add_s3_paths(ns_entry, shortcuts_data, vdf_path,
                   native_steam: bool = False, linux_native: bool = False):
     import os
     clear_content()
-    add_header("Add New Game Config", "Step 4 -- Select paths and options")
+    add_header("Add New Game Config", "Step 5 -- Select paths and options")
 
     exe_tag    = "_add_exe"
     save_tag   = "_add_save"

@@ -616,6 +616,7 @@ _push_handler() {{
         sleep 0.5
         i=$((i+1))
     done
+    "$SAVESYNC" log "[wrapper] push_handler woke: cancel=$([ -f "$CANCEL_FILE" ] && echo yes || echo no) push_start=$([ -f "$PUSH_START_FILE" ] && echo yes || echo no) i=$i"
     [ -f "$CANCEL_FILE" ] && return
     [ ! -f "$PUSH_START_FILE" ] && return
     rm -f "$PUSH_START_FILE"
@@ -722,6 +723,23 @@ fi
 # Start push handler in background — waits for PUSH_START_FILE.
 _push_handler &
 
+# On non-gamescope desktop Linux + Proton: run the native pre-launcher as a
+# background input relay.  It reads controller events via Linux SDL (which can
+# see evdev devices) and forwards them via IPC file so pre-launcher.exe can poll
+# them from inside Wine.  On SteamOS/Bazzite (gamescope), XInput works natively
+# so the relay is skipped.
+_INPUT_RELAY_PID=""
+if [ "$_NATIVE_PRELAUNCHER" -eq 1 ] && [ -n "$PRELAUNCHER_NATIVE" ] && \\
+   [ -f "$PRELAUNCHER_NATIVE" ] && [ -z "${{GAMESCOPE_WAYLAND_DISPLAY:-}}" ]; then
+    # Kill any orphaned relay left over from a crashed previous run.
+    pkill -f "$PRELAUNCHER_NATIVE input-relay" 2>/dev/null || true
+    "$PRELAUNCHER_NATIVE" input-relay &
+    _INPUT_RELAY_PID=$!
+    "$SAVESYNC" log "[wrapper] input relay started pid=$_INPUT_RELAY_PID"
+    # Ensure relay is always killed when this script exits (force-stop, crash, etc.)
+    trap '[ -n "$_INPUT_RELAY_PID" ] && kill "$_INPUT_RELAY_PID" 2>/dev/null || true' EXIT
+fi
+
 # === Launch flow ===
 # FLOW 1 — Proton pre-launcher.exe (native Steam Proton or Proton shortcut):
 #   pre-launcher.exe is spliced into the Proton verb chain; it handles sync UI,
@@ -734,12 +752,16 @@ LAUNCH_RC=0
 _CANCELLED=0
 
 if [ "$_NATIVE_PRELAUNCHER" -eq 1 ]; then
-    # FLOW 1: Proton pre-launcher.exe embedded in command chain
+    # FLOW 1: Proton pre-launcher.exe embedded in command chain.
+    "$SAVESYNC" log "[wrapper] FLOW1: starting Proton"
     "${{_LAUNCH_CMD[@]}}"
     LAUNCH_RC=$?
-    "$SAVESYNC" log "[wrapper] Proton launch exited rc=$LAUNCH_RC"
+    "$SAVESYNC" log "[wrapper] FLOW1: Proton exited rc=$LAUNCH_RC cancel=$([ -f "$CANCEL_FILE" ] && echo yes || echo no) push_start=$([ -f "$PUSH_START_FILE" ] && echo yes || echo no)"
+    [ -n "$_INPUT_RELAY_PID" ] && kill "$_INPUT_RELAY_PID" 2>/dev/null && _INPUT_RELAY_PID=""
+    "$SAVESYNC" log "[wrapper] FLOW1: relay killed"
     # Fallback: ensure push runs if pre-launcher.exe crashed without signalling
     [ ! -f "$CANCEL_FILE" ] && touch "$PUSH_START_FILE"
+    "$SAVESYNC" log "[wrapper] FLOW1: push_start after fallback=$([ -f "$PUSH_START_FILE" ] && echo yes || echo no)"
 elif [ -n "$PRELAUNCHER_NATIVE" ] && [ -f "$PRELAUNCHER_NATIVE" ]; then
     # FLOW 2: Linux native pre-launcher — pre phase (blocks)
     "$PRELAUNCHER_NATIVE" pre
@@ -775,7 +797,9 @@ if [ -f "$_diag_file" ]; then
 fi
 
 # Wait for both background handlers to finish
+"$SAVESYNC" log "[wrapper] waiting for background handlers"
 wait 2>/dev/null || true
+"$SAVESYNC" log "[wrapper] background handlers done"
 
 # Unmount disc image
 if [ -n "$_disc_mount" ]; then
@@ -1062,7 +1086,7 @@ def update_shortcut_launch(
             else:
                 app_id = mc.get("app_id") if mc else None
                 prelauncher_win    = _install_prelauncher(str(app_id)) if app_id else None
-                prelauncher_native = ""
+                prelauncher_native = _ensure_prelauncher_native()
 
             wrapper_path = _write_launch_wrapper(
                 game_name, savesync_bin,
@@ -1346,7 +1370,7 @@ def update_native_game_launch(
                 compatdata / "pfx" / "drive_c" / "users" / "steamuser"
                 / "AppData" / "Local" / "ExternalGameSync" / "pre-launcher.exe"
             ) if compatdata else ""
-            prelauncher_native = ""
+            prelauncher_native = _ensure_prelauncher_native()
         wrapper_path = _write_launch_wrapper(
             game_name, savesync_bin,
             game_id=game_id, game_exe_win=game_exe_win, disc_image=disc_image,

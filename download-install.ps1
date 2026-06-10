@@ -21,7 +21,7 @@
     [Net.SecurityProtocolType]::Tls13 -bor
     [Net.ServicePointManager]::SecurityProtocol
 
-$REPO_ZIP = 'https://github.com/pmahern/steamexternalgamesync/archive/refs/heads/master.zip'
+$API_URL = 'https://api.github.com/repos/pmahern/steamexternalgamesync/releases/latest'
 
 Write-Host ''
 Write-Host '  ExternalGameSync - Download & Install'
@@ -38,21 +38,25 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 }
 Write-Host "[ok] $(python --version 2>&1)"
 
-# ── Download ───────────────────────────────────────────────────────────────────
+# ── Fetch latest release info ──────────────────────────────────────────────────
 $tmp     = Join-Path $env:TEMP "egs_install_$(Get-Random)"
-$zipFile = Join-Path $tmp 'master.zip'
+$zipFile = Join-Path $tmp 'release.zip'
 
 try {
     New-Item -ItemType Directory -Path $tmp | Out-Null
 
-    Write-Host 'Downloading ExternalGameSync from GitHub...'
-    # WebClient.DownloadFile does NOT set a Zone.Identifier (Mark of the Web) on
-    # the downloaded file, unlike Invoke-WebRequest on modern Windows.  This means
-    # Expand-Archive will not propagate MOTW to the extracted files, so install.ps1
-    # runs without SmartScreen or execution-policy interference — same mechanism
-    # used by the built-in 'externalgamesync update' command.
-    $wc = New-Object Net.WebClient
-    $wc.DownloadFile($REPO_ZIP, $zipFile)
+    Write-Host 'Fetching latest release info from GitHub...'
+    # WebClient.DownloadString does NOT set a Zone.Identifier (Mark of the Web),
+    # unlike Invoke-WebRequest on modern Windows — same mechanism used by the
+    # built-in 'externalgamesync update' command.
+    $wc      = New-Object Net.WebClient
+    $release = ConvertFrom-Json $wc.DownloadString($API_URL)
+    $zipUrl  = $release.zipball_url
+    $tag     = if ($release.tag_name) { $release.tag_name } else { 'latest' }
+    Write-Host "[ok] Latest release: $tag"
+
+    Write-Host "Downloading $tag..."
+    $wc.DownloadFile($zipUrl, $zipFile)
     Write-Host '[ok] Downloaded'
 
     Write-Host 'Extracting...'

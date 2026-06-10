@@ -202,7 +202,7 @@ def _assign_s2_shortcut(game_cfg: dict):
         return
 
     clear_content()
-    add_header("Assign Config", f"Step 2 -- Assign '{game_cfg['name']}' to a Steam shortcut")
+    add_header("Assign Config", f"Step 3 -- Assign '{game_cfg['name']}' to a Steam shortcut")
 
     rows    = [[g["name"], g["exe"]] for g in ns_games]
     idx_map = {g["name"]: g for g in ns_games}
@@ -229,7 +229,7 @@ def _assign_s2_shortcut(game_cfg: dict):
 def _assign_s2_native(game_cfg: dict):
     clear_content()
     add_header("Assign Config",
-               f"Step 2 -- Confirm Steam App ID for '{game_cfg['name']}'")
+               f"Step 3 -- Confirm Steam App ID for '{game_cfg['name']}'")
 
     dpg.add_text(
         "Important: Steam Cloud conflict warning",
@@ -330,7 +330,7 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
                      linux_native: bool = False):
     import os
     clear_content()
-    add_header("Assign Config", "Step 3 -- Confirm or browse paths")
+    add_header("Assign Config", "Step 4 -- Confirm or browse paths")
 
     exe_tag  = "_assign_exe"
     save_tag = "_assign_save"

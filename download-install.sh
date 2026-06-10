@@ -7,7 +7,7 @@
 
 set -e
 
-REPO_ZIP="https://github.com/pmahern/steamexternalgamesync/archive/refs/heads/master.tar.gz"
+API_URL="https://api.github.com/repos/pmahern/steamexternalgamesync/releases/latest"
 
 echo ""
 echo "  ExternalGameSync — Download & Install"
@@ -29,18 +29,24 @@ fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-echo "Downloading ExternalGameSync from GitHub..."
-curl -fsSL --retry 3 "$REPO_ZIP" -o "$TMP/master.tar.gz"
+echo "Fetching latest release info from GitHub..."
+RELEASE_JSON=$(curl -fsSL --retry 3 "$API_URL")
+TARBALL_URL=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d['tarball_url'])" "$RELEASE_JSON")
+TAG=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('tag_name','latest'))" "$RELEASE_JSON")
+echo "[ok] Latest release: $TAG"
+
+echo "Downloading $TAG..."
+curl -fsSL --retry 3 -L "$TARBALL_URL" -o "$TMP/release.tar.gz"
 echo "[ok] Downloaded"
 
 echo "Extracting..."
-tar -xzf "$TMP/master.tar.gz" -C "$TMP"
+tar -xzf "$TMP/release.tar.gz" -C "$TMP"
 EXTRACTED=$(find "$TMP" -maxdepth 1 -mindepth 1 -type d | head -1)
 if [[ -z "$EXTRACTED" ]]; then
     echo "[error] Could not find extracted directory — archive may be corrupt."
     exit 1
 fi
-echo "[ok] Extracted to $EXTRACTED"
+echo "[ok] Extracted"
 
 echo ""
 echo "Running installer..."
