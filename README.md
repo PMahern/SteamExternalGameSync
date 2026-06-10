@@ -49,7 +49,7 @@ Both commands download the latest release from GitHub, extract it without touchi
 
 ---
 
-## Git Dowload and Install
+## Git Download and Install
 
 If you prefer to clone the repo manually you can simply clone it then run install.sh:
 
