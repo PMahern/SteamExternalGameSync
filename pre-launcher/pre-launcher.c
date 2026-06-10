@@ -1181,6 +1181,8 @@ static void run_input_relay(void)
                 }
             } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
                 controllers_open_all();
+            } else if (ev.type == SDL_QUIT) {
+                return;
             }
         } while (SDL_PollEvent(&ev));
     }

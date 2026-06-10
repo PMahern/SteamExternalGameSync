@@ -616,6 +616,7 @@ _push_handler() {{
         sleep 0.5
         i=$((i+1))
     done
+    "$SAVESYNC" log "[wrapper] push_handler woke: cancel=$([ -f "$CANCEL_FILE" ] && echo yes || echo no) push_start=$([ -f "$PUSH_START_FILE" ] && echo yes || echo no) i=$i"
     [ -f "$CANCEL_FILE" ] && return
     [ ! -f "$PUSH_START_FILE" ] && return
     rm -f "$PUSH_START_FILE"
@@ -730,9 +731,13 @@ _push_handler &
 _INPUT_RELAY_PID=""
 if [ "$_NATIVE_PRELAUNCHER" -eq 1 ] && [ -n "$PRELAUNCHER_NATIVE" ] && \\
    [ -f "$PRELAUNCHER_NATIVE" ] && [ -z "${{GAMESCOPE_WAYLAND_DISPLAY:-}}" ]; then
+    # Kill any orphaned relay left over from a crashed previous run.
+    pkill -f "$PRELAUNCHER_NATIVE input-relay" 2>/dev/null || true
     "$PRELAUNCHER_NATIVE" input-relay &
     _INPUT_RELAY_PID=$!
     "$SAVESYNC" log "[wrapper] input relay started pid=$_INPUT_RELAY_PID"
+    # Ensure relay is always killed when this script exits (force-stop, crash, etc.)
+    trap '[ -n "$_INPUT_RELAY_PID" ] && kill "$_INPUT_RELAY_PID" 2>/dev/null || true' EXIT
 fi
 
 # === Launch flow ===
@@ -748,33 +753,15 @@ _CANCELLED=0
 
 if [ "$_NATIVE_PRELAUNCHER" -eq 1 ]; then
     # FLOW 1: Proton pre-launcher.exe embedded in command chain.
-    # Run Proton in the background so we can watch for cancellation and force-kill
-    # wineserver if it doesn't exit promptly — otherwise Steam thinks the game is
-    # still running on desktops where Wine cleanup is slow (e.g. Linux Mint).
-    "${{_LAUNCH_CMD[@]}}" &
-    _PROTON_PID=$!
-
-    # Watcher: once cancel is detected, give Wine a short grace period then force it out.
-    ( while kill -0 "$_PROTON_PID" 2>/dev/null; do
-          if [ -f "$CANCEL_FILE" ]; then
-              sleep 3
-              kill -0 "$_PROTON_PID" 2>/dev/null && \
-                  [ -n "$STEAM_COMPAT_DATA_PATH" ] && \
-                  WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx" wineserver -k 2>/dev/null || true
-              break
-          fi
-          sleep 0.5
-      done
-    ) &
-    _WATCHER_PID=$!
-
-    wait $_PROTON_PID
+    "$SAVESYNC" log "[wrapper] FLOW1: starting Proton"
+    "${{_LAUNCH_CMD[@]}}"
     LAUNCH_RC=$?
-    kill "$_WATCHER_PID" 2>/dev/null; wait "$_WATCHER_PID" 2>/dev/null || true
+    "$SAVESYNC" log "[wrapper] FLOW1: Proton exited rc=$LAUNCH_RC cancel=$([ -f "$CANCEL_FILE" ] && echo yes || echo no) push_start=$([ -f "$PUSH_START_FILE" ] && echo yes || echo no)"
     [ -n "$_INPUT_RELAY_PID" ] && kill "$_INPUT_RELAY_PID" 2>/dev/null && _INPUT_RELAY_PID=""
-    "$SAVESYNC" log "[wrapper] Proton launch exited rc=$LAUNCH_RC"
+    "$SAVESYNC" log "[wrapper] FLOW1: relay killed"
     # Fallback: ensure push runs if pre-launcher.exe crashed without signalling
     [ ! -f "$CANCEL_FILE" ] && touch "$PUSH_START_FILE"
+    "$SAVESYNC" log "[wrapper] FLOW1: push_start after fallback=$([ -f "$PUSH_START_FILE" ] && echo yes || echo no)"
 elif [ -n "$PRELAUNCHER_NATIVE" ] && [ -f "$PRELAUNCHER_NATIVE" ]; then
     # FLOW 2: Linux native pre-launcher — pre phase (blocks)
     "$PRELAUNCHER_NATIVE" pre
@@ -810,7 +797,9 @@ if [ -f "$_diag_file" ]; then
 fi
 
 # Wait for both background handlers to finish
+"$SAVESYNC" log "[wrapper] waiting for background handlers"
 wait 2>/dev/null || true
+"$SAVESYNC" log "[wrapper] background handlers done"
 
 # Unmount disc image
 if [ -n "$_disc_mount" ]; then
