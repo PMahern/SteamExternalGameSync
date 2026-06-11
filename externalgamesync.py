@@ -43,7 +43,7 @@ def _pygame_dialog(title: str, body: str, label_a: str, label_b: str, label_c: s
         return None
 
     # In gaming mode, force SDL onto gamescope's XWayland display (X11 driver)
-    # rather than the Wayland socket — more reliably surfaces the window.
+    # rather than the Wayland socket -- more reliably surfaces the window.
     # Save and restore env so the game process launched afterwards is unaffected.
     _saved_env: dict[str, str | None] = {}
     if os.environ.get("GAMESCOPE_WAYLAND_DISPLAY"):
@@ -279,13 +279,13 @@ def _prompt_conflict(game_name: str, app_id: str | None = None) -> str | None:
             game_name + " saves have changed on cloud storage since your last sync.\n"
             "Both sides will be backed up.\n\n"
             "Yes = Keep Cloud    No = Keep Local    Cancel = Abort launch",
-            "ExternalGameSync — Save Conflict", flags,
+            "ExternalGameSync -- Save Conflict", flags,
         )
         if result == 6:  return "remote"   # IDYES
         if result == 7:  return "local"    # IDNO
         return None                         # IDCANCEL or closed
 
-    log("Conflict prompt unavailable — cancelling launch")
+    log("Conflict prompt unavailable -- cancelling launch")
     return None
 
 
@@ -298,7 +298,7 @@ def _prompt_no_connection(game_name: str, server_ahead: bool = False) -> bool:
     """
     if server_ahead:
         body = ("Could not reach cloud storage before launching " + game_name + ". "
-                "The server was last known to have unsynced changes — "
+                "The server was last known to have unsynced changes -- "
                 "you may be playing with outdated saves. "
                 "Continue launching the game anyway?")
         win_body = ("Could not reach cloud storage before launching " + game_name + ".\n"
@@ -329,11 +329,11 @@ def _prompt_no_connection(game_name: str, server_ahead: bool = False) -> bool:
         import ctypes
         flags  = 0x00000004 | 0x00000030 | 0x00040000
         result = ctypes.windll.user32.MessageBoxW(
-            0, win_body, "ExternalGameSync — Cannot Connect", flags,
+            0, win_body, "ExternalGameSync -- Cannot Connect", flags,
         )
         return result == 6
 
-    log("No dialog available for connection failure — defaulting to continue")
+    log("No dialog available for connection failure -- defaulting to continue")
     return True
 
 
@@ -345,11 +345,11 @@ def cmd_launch(args):
 
     Steam expands %command% into the full Proton-wrapped launch command,
     which we receive as extra args and pass straight through unchanged.
-    This means Steam still handles all the Proton/Wine setup — we just
+    This means Steam still handles all the Proton/Wine setup -- we just
     bookend it with save syncing.
 
     If called without %command% (manual/testing), falls back to the
-    exe_path stored in the game config (runs without Proton — testing only).
+    exe_path stored in the game config (runs without Proton -- testing only).
     """
     if not args:
         print("Usage: externalgamesync launch <game-name> %command%")
@@ -358,7 +358,7 @@ def cmd_launch(args):
     game_name = args[0]
     # Everything after the game name is %command% expanded by Steam.
     # Steam passes each token as a separate argv element so we pass them
-    # through as-is — no splitting or joining needed.
+    # through as-is -- no splitting or joining needed.
     extra = args[1:] if len(args) > 1 else []
     if extra and extra[0] == "--":
         extra = extra[1:]
@@ -374,7 +374,7 @@ def cmd_launch(args):
 
     game_id = game["id"]
 
-    # %command% from Steam is the full Proton-wrapped command — pass through as-is
+    # %command% from Steam is the full Proton-wrapped command -- pass through as-is
     if extra:
         exe_parts = extra
     else:
@@ -383,7 +383,7 @@ def cmd_launch(args):
         if not mc:
             log_err(f"No config for this machine ({hostname()}). Run the GUI to assign.")
             sys.exit(1)
-        log("[warn] No %command% — running exe directly without Steam (testing only)")
+        log("[warn] No %command% -- running exe directly without Steam (testing only)")
         if mc.get("platform") == "windows":
             exe_parts = [mc["exe_path"]]
         else:
@@ -402,19 +402,19 @@ def cmd_launch(args):
         pull_ok, pull_msg = rclone_sync_pull(game_id, game)
 
         if pull_msg == PULL_CONFLICT:
-            # Remote changed since last sync — ask user what to keep
-            log(f"Conflict detected for '{game['name']}' — prompting user")
+            # Remote changed since last sync -- ask user what to keep
+            log(f"Conflict detected for '{game['name']}' -- prompting user")
             keep = _prompt_conflict(game["name"])
             log(f"User chose: keep {keep}")
             if keep is None:
-                log("User cancelled at conflict dialog — aborting launch")
+                log("User cancelled at conflict dialog -- aborting launch")
                 sys.exit(1)
             pull_ok, pull_msg = rclone_sync_pull_force(game_id, keep=keep)
             if not pull_ok:
                 print(f"[warn] Conflict resolution failed: {pull_msg}")
 
         elif pull_msg == PULL_NO_CONNECTION:
-            log(f"Cannot reach cloud storage for '{game['name']}' — prompting user")
+            log(f"Cannot reach cloud storage for '{game['name']}' -- prompting user")
             last_status = load_sync_state(game_id)
             server_ahead = last_status in ("cloud_ahead", "conflict")
             if not _prompt_no_connection(game["name"], server_ahead=server_ahead):
@@ -426,7 +426,7 @@ def cmd_launch(args):
             print(f"[warn] Pre-launch pull had issues: {pull_msg}")
             print(f"  Check: externalgamesync log")
 
-        # Launch — Steam already tokenizes %command% correctly into argv elements.
+        # Launch -- Steam already tokenizes %command% correctly into argv elements.
         # Pass the list directly and inherit the full environment.
         log(f"Launching: {' '.join(exe_parts)}")
         proc = subprocess.run(exe_parts, env=os.environ.copy())
@@ -457,9 +457,9 @@ def cmd_pre_launch(args):
 
     Exit codes:
       0  clean pull completed (or first-run, no remote yet)
-      1  conflict detected   — pre-launcher.exe must handle dialog + rclone
-      2  no connection       — pre-launcher.exe shows warning, game still launches
-      3  other error         — treated as ok by wrapper, game still launches
+      1  conflict detected   -- pre-launcher.exe must handle dialog + rclone
+      2  no connection       -- pre-launcher.exe shows warning, game still launches
+      3  other error         -- treated as ok by wrapper, game still launches
     """
     if len(args) < 3:
         print("Usage: externalgamesync pre-launch <game_id> <status_file> <game_exe_win>")
@@ -572,17 +572,17 @@ def cmd_pull(args):
         sys.exit(1)
     ok, msg = rclone_sync_pull(game["id"], game)
     if msg == PULL_CONFLICT:
-        log(f"Conflict detected for '{game['name']}' — prompting user")
+        log(f"Conflict detected for '{game['name']}' -- prompting user")
         keep = _prompt_conflict(game["name"])
         log(f"User chose: keep {keep}")
         if keep is None:
-            log("User cancelled at conflict dialog — aborting")
+            log("User cancelled at conflict dialog -- aborting")
             sys.exit(1)
         ok, msg = rclone_sync_pull_force(game["id"], keep=keep, game=game)
         if not ok:
             log_err(f"Conflict resolution failed: {msg}")
     elif msg == PULL_NO_CONNECTION:
-        log(f"Cannot reach cloud storage for '{game['name']}' — prompting user")
+        log(f"Cannot reach cloud storage for '{game['name']}' -- prompting user")
         last_status = load_sync_state(game["id"])
         server_ahead = last_status in ("cloud_ahead", "conflict")
         if not _prompt_no_connection(game["name"], server_ahead=server_ahead):
@@ -591,7 +591,7 @@ def cmd_pull(args):
         log("User chose to continue with local saves")
     elif not ok:
         log_err(f"Pull failed: {msg}")
-        # Don't exit non-zero — we still want the game to launch even if pull fails
+        # Don't exit non-zero -- we still want the game to launch even if pull fails
     sys.exit(0)
 
 
@@ -604,7 +604,7 @@ def cmd_push(args):
     if not game:
         print(f"Game not found: {args[0]}")
         sys.exit(1)
-    log(f"[push] cmd_push triggered for '{args[0]}' — post-game push via wrapper")
+    log(f"[push] cmd_push triggered for '{args[0]}' -- post-game push via wrapper")
     ok, msg = rclone_sync_push(game["id"])
     if not ok:
         log_err(f"Push failed: {msg}")
@@ -664,12 +664,12 @@ def cmd_update_shortcuts(args):
     ns_by_name  = {g["name"]: g for g in ns_games}
     ns_by_appid = {k: g for g in ns_games if (k := _appid_key(g["appid"]))}
 
-    # Shut Steam down before touching localconfig.vdf — Steam overwrites it on exit
+    # Shut Steam down before touching localconfig.vdf -- Steam overwrites it on exit
     all_configs = [(game_cfg, get_local_config(game_cfg["id"])) for game_cfg in load_games()]
     has_native  = any(mc and mc.get("native_steam") for _, mc in all_configs)
     if has_native:
         from gui_common import shutdown_steam_sync
-        print("Native Steam games detected — closing Steam before updating launch options...")
+        print("Native Steam games detected -- closing Steam before updating launch options...")
         was_running = shutdown_steam_sync()
         if was_running:
             print("Steam closed.")
@@ -824,7 +824,7 @@ def cmd_install_decky(args):
     except PermissionError:
         # Decky's plugin service runs as root, so a previously installed copy
         # may be owned by root. Re-run the copy operations under sudo.
-        print("Permission denied — retrying with sudo...")
+        print("Permission denied -- retrying with sudo...")
         cmds = [
             ["sudo", "rm", "-rf", str(dest)],
             ["sudo", "mkdir", str(dest)],

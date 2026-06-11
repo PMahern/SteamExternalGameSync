@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ExternalGameSync — dearpygui management GUI entry point."""
+"""ExternalGameSync -- dearpygui management GUI entry point."""
 
 from __future__ import annotations
 

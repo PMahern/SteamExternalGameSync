@@ -14,7 +14,7 @@ MANIFEST_URL = (
 )
 _MANIFEST_MAX_AGE_DAYS = 7
 
-# Folders present in a stock Proton prefix — anything outside these is a game install
+# Folders present in a stock Proton prefix -- anything outside these is a game install
 _BASELINE_DRIVE_C = frozenset({
     "Program Files", "Program Files (x86)", "windows", "users", "ProgramData",
 })

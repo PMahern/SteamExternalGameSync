@@ -1,5 +1,5 @@
 """
-ExternalGameSync GUI — cloud storage setup flow.
+ExternalGameSync GUI -- cloud storage setup flow.
 """
 
 from __future__ import annotations
@@ -157,7 +157,7 @@ def _setup_connect():
     elif provider_key in _OAUTH_PROVIDERS:
         saved            = {"provider_type": provider_key}
         connecting_label = "Waiting for browser..."
-        status_text      = "Browser opened — please sign in and return here..."
+        status_text      = "Browser opened -- please sign in and return here..."
         reset_label      = "Connect - opens browser"
         def _work():
             ok, err = rclone_mod.rclone_setup_oauth(provider_key)

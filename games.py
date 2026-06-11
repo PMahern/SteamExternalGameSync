@@ -1,5 +1,5 @@
 """
-ExternalGameSync — games.json registry and per-machine config helpers.
+ExternalGameSync -- games.json registry and per-machine config helpers.
 """
 
 from __future__ import annotations

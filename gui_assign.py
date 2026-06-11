@@ -1,5 +1,5 @@
 """
-ExternalGameSync GUI — assign an existing cloud config to a Steam shortcut or native Steam game.
+ExternalGameSync GUI -- assign an existing cloud config to a Steam shortcut or native Steam game.
 """
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ def _assign_s2_shortcut(game_cfg: dict):
     add_action_bar("Next -->", _next, back_cb=lambda: _assign_s2_type(game_cfg))
 
 
-# ── Step 2b: native Steam game — pick app_id and auto-detect paths ─────────────
+# ── Step 2b: native Steam game -- pick app_id and auto-detect paths ─────────────
 
 def _assign_s2_native(game_cfg: dict):
     clear_content()
@@ -353,7 +353,7 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
                            width=1, show=False, parent="content_group")
     else:
         if linux_native:
-            # Native Linux app — no Proton prefix. Store the shortcut's app ID so we
+            # Native Linux app -- no Proton prefix. Store the shortcut's app ID so we
             # can find it in shortcuts.vdf later; it's not a compatdata ID.
             raw_appid = ns_entry.get("appid") or 0
             _ln_aid = str(int(raw_appid) & 0xFFFFFFFF) if raw_appid else ""
@@ -376,11 +376,11 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
                 if "<" not in _sp:
                     auto_save_val = _sp
         elif native_steam and native_app_id:
-            # For native Steam, exe is in steamapps/common — save is in drive_c
+            # For native Steam, exe is in steamapps/common -- save is in drive_c
             auto_aid_val = native_app_id
             save_p = resolve_save_path(native_app_id, game_cfg.get("save_path", ""))
             auto_save_val = str(save_p.resolve())
-            # Don't try to auto-fill the exe — it lives in steamapps/common,
+            # Don't try to auto-fill the exe -- it lives in steamapps/common,
             # not drive_c, so the user needs to browse to it there.
             dpg.add_input_text(tag=aid_tag, default_value=auto_aid_val,
                                width=1, show=False, parent="content_group")
@@ -395,7 +395,7 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
                                enabled=not aid_readonly,
                                parent="content_group")
             if aid_readonly:
-                dpg.add_text("  (fixed — native Steam game uses its own prefix)",
+                dpg.add_text("  (fixed -- native Steam game uses its own prefix)",
                              parent="content_group", color=(130, 130, 155))
 
             prefix_rows = list_proton_prefixes()

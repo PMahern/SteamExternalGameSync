@@ -1,5 +1,5 @@
 """
-ExternalGameSync — save snapshots, conflict detection, backup, and sync operations.
+ExternalGameSync -- save snapshots, conflict detection, backup, and sync operations.
 """
 
 from __future__ import annotations
@@ -343,7 +343,7 @@ def rclone_sync_pull(game_id: str, game: dict | None = None) -> tuple[bool, str]
     if sys.platform != "win32":
         lp = Path(local)
         if lp.exists() and not lp.is_symlink():
-            msg = (f"save path '{local}' is a plain directory, not a symlink — "
+            msg = (f"save path '{local}' is a plain directory, not a symlink -- "
                    f"run 'externalgamesync gui' and use Relink to fix this before syncing")
             log_err(msg)
             return False, PULL_FAILED
@@ -366,7 +366,7 @@ def rclone_sync_pull(game_id: str, game: dict | None = None) -> tuple[bool, str]
         return False, PULL_FAILED
 
     if status == "conflict":
-        log(f"pull: conflict detected for '{game_id}' — remote changed since last sync")
+        log(f"pull: conflict detected for '{game_id}' -- remote changed since last sync")
         save_sync_state(game_id, "conflict")
         return True, PULL_CONFLICT
 
@@ -375,13 +375,13 @@ def rclone_sync_pull(game_id: str, game: dict | None = None) -> tuple[bool, str]
         # a destructive sync that could wipe existing local saves.
         current_local = _take_local_snapshot(game_id, game)
         if current_local and not current_remote:
-            # Local has files, remote is empty — local is ahead; skip pull so push
+            # Local has files, remote is empty -- local is ahead; skip pull so push
             # can establish the remote without destroying local saves.
-            log(f"pull: no snapshot, remote empty but local has saves — skipping pull for '{game_id}'")
+            log(f"pull: no snapshot, remote empty but local has saves -- skipping pull for '{game_id}'")
             return True, PULL_NO_REMOTE
         if current_local and current_remote:
-            # Both sides have files with no shared baseline — treat as conflict.
-            log(f"pull: no snapshot, both sides have saves for '{game_id}' — treating as conflict")
+            # Both sides have files with no shared baseline -- treat as conflict.
+            log(f"pull: no snapshot, both sides have saves for '{game_id}' -- treating as conflict")
             save_sync_state(game_id, "conflict")
             return True, PULL_CONFLICT
         # Local is empty: safe to pull whatever's on the remote.
@@ -445,7 +445,7 @@ def rclone_sync_pull_force(game_id: str, keep: str,
         return False, PULL_FAILED
 
     # keep == "local"
-    log(f"conflict resolved (kept local): saves/{game_id} — will push on exit")
+    log(f"conflict resolved (kept local): saves/{game_id} -- will push on exit")
     save_sync_state(game_id, "in_sync")
     return True, PULL_OK
 
@@ -460,7 +460,7 @@ def rclone_sync_push(game_id: str, game: dict | None = None) -> tuple[bool, str]
     if sys.platform != "win32":
         lp = Path(local)
         if lp.exists() and not lp.is_symlink():
-            msg = (f"save path '{local}' is a plain directory, not a symlink — "
+            msg = (f"save path '{local}' is a plain directory, not a symlink -- "
                    f"run 'externalgamesync gui' and use Relink to fix this before syncing")
             log_err(msg)
             return False, "failed"
@@ -469,7 +469,7 @@ def rclone_sync_push(game_id: str, game: dict | None = None) -> tuple[bool, str]
     if last_local:
         current_local = _take_local_snapshot(game_id, game)
         if not current_local:
-            msg = (f"push blocked for '{game_id}': local save folder is empty but previous sync had files — "
+            msg = (f"push blocked for '{game_id}': local save folder is empty but previous sync had files -- "
                    f"run pull first to restore saves before pushing")
             log_err(msg)
             return False, "push blocked (local empty, cloud has saves)"
@@ -477,7 +477,7 @@ def rclone_sync_push(game_id: str, game: dict | None = None) -> tuple[bool, str]
     try:
         _run([rclone_cmd(), "mkdir", remote_path], capture_output=True, text=True, timeout=15)
     except subprocess.TimeoutExpired:
-        log_err(f"push: mkdir timed out for '{game_id}' — server unreachable")
+        log_err(f"push: mkdir timed out for '{game_id}' -- server unreachable")
         return False, "push failed (mkdir timed out)"
 
     fa  = _filter_args(game)
@@ -508,7 +508,7 @@ def rclone_sync_push(game_id: str, game: dict | None = None) -> tuple[bool, str]
 
 
 def rclone_bisync(game_id: str, resync: bool = False) -> tuple[bool, str]:
-    """Compatibility shim — pull then push."""
+    """Compatibility shim -- pull then push."""
     ok1, msg1 = rclone_sync_pull(game_id)
     if not ok1 or msg1 == PULL_CONFLICT:
         return ok1, msg1

@@ -1,11 +1,10 @@
 """
-ExternalGameSync — rclone availability, remote setup, and games.json push/pull.
+ExternalGameSync -- rclone availability, remote setup, and games.json push/pull.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 import tempfile
@@ -64,34 +63,15 @@ def rclone_setup_oauth(provider_type: str) -> tuple[bool, str]:
     if not rclone_available():
         return False, "rclone is not installed"
     try:
-        r = _run(
-            [rclone_cmd(), "authorize", provider_type],
-            capture_output=True, text=True, timeout=300,
-        )
+        args = ([rclone_cmd(), "config", "create", NC_REMOTE_NAME, provider_type]
+                + _OAUTH_EXTRA_PARAMS.get(provider_type, []))
+        r = _run(args, capture_output=True, text=True, timeout=300,
+                 stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return False, "Authorization timed out (5 min limit)"
     if r.returncode != 0:
         return False, r.stderr.strip() or "Authorization failed or was cancelled"
-    token = _parse_oauth_token(r.stdout)
-    if not token:
-        return False, "Could not read authorization token from rclone output"
-    args = ([rclone_cmd(), "config", "create", NC_REMOTE_NAME, provider_type,
-             "token", token]
-            + _OAUTH_EXTRA_PARAMS.get(provider_type, []))
-    r = _run(args, capture_output=True, text=True)
-    if r.returncode != 0:
-        return False, r.stderr.strip()
     return True, ""
-
-
-def _parse_oauth_token(output: str) -> str:
-    m = re.search(r'--->\s*(\{.*?\})\s*<---', output, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r'\{[^{}]*"access_token"[^{}]*\}', output)
-    if m:
-        return m.group(0)
-    return ""
 
 
 def rclone_setup_sftp(host: str, port: int, username: str, password: str) -> tuple[bool, str]:
@@ -137,7 +117,7 @@ def rclone_pull_games_json() -> tuple[bool, str]:
     local_games = load_games()
     remote_games = _fetch_remote_games()
     if not remote_games:
-        # Nothing on server yet — nothing to pull
+        # Nothing on server yet -- nothing to pull
         return True, "no existing config (fresh start)"
     merged = merge_games(local_games, remote_games)
     save_games(merged)
@@ -150,7 +130,7 @@ def _strip_machine_fields(g: dict) -> dict:
     return {k: v for k, v in g.items() if k not in _MACHINE_FIELDS}
 
 def merge_games(local: list[dict], remote: list[dict]) -> list[dict]:
-    """Merge two game lists by id using 'added' timestamp — newer entry wins.
+    """Merge two game lists by id using 'added' timestamp -- newer entry wins.
     Games present on only one side are kept as-is. Ties go to local."""
     from datetime import datetime
 
@@ -219,7 +199,7 @@ def rclone_push_games_json() -> tuple[bool, str]:
             capture_output=True, text=True, timeout=30
         )
     except subprocess.TimeoutExpired:
-        return False, "Connection timed out (30 s) — check VPN / server"
+        return False, "Connection timed out (30 s) -- check VPN / server"
     if r.returncode != 0:
         return False, r.stderr.strip()
     return True, ""

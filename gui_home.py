@@ -1,5 +1,5 @@
 """
-ExternalGameSync GUI — home dashboard and navigation guard.
+ExternalGameSync GUI -- home dashboard and navigation guard.
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ def refresh_and_home(warning: str | None = None, info: str | None = None):
                     else:
                         dpg.add_text("")
 
-        # Check sync status sequentially — dpg.set_frame_callback only holds one
+        # Check sync status sequentially -- dpg.set_frame_callback only holds one
         # callback per frame slot, so concurrent run_async calls overwrite each other.
         from sync import get_sync_status
         from config import log_err

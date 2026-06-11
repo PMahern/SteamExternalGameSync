@@ -1,5 +1,5 @@
 """
-ExternalGameSync — paths, subprocess helpers, logging, and settings.
+ExternalGameSync -- paths, subprocess helpers, logging, and settings.
 Everything else imports from here; this module has no internal dependencies.
 """
 

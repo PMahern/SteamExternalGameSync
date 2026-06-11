@@ -1,5 +1,5 @@
 """
-ExternalGameSync GUI — sync saves, sync artwork, and relink symlinks.
+ExternalGameSync GUI -- sync saves, sync artwork, and relink symlinks.
 """
 
 from __future__ import annotations
@@ -232,7 +232,7 @@ def flow_sync_all():
                         user_data=game,
                     )
                 with dpg.group(horizontal=True, tag=f"_ss_conflict_{gid}", show=False):
-                    dpg.add_text("Conflict — keep:", indent=16)
+                    dpg.add_text("Conflict -- keep:", indent=16)
                     dpg.add_button(
                         label="Local", tag=f"_ss_local_{gid}",
                         width=80, height=22,

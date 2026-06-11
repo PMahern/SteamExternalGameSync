@@ -1,5 +1,5 @@
 """
-ExternalGameSync — Steam grid artwork push/pull via cloud storage.
+ExternalGameSync -- Steam grid artwork push/pull via cloud storage.
 """
 
 from __future__ import annotations

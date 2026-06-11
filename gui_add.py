@@ -1,5 +1,5 @@
 """
-ExternalGameSync GUI — create a new game config from a Steam shortcut or native Steam game.
+ExternalGameSync GUI -- create a new game config from a Steam shortcut or native Steam game.
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
     aid_tag = "_add_aid"
 
     if native_steam:
-        # App ID is fixed — show it read-only and warn about Steam Cloud
+        # App ID is fixed -- show it read-only and warn about Steam Cloud
         dpg.add_spacer(height=8, parent="content_group")
         dpg.add_text(f"Steam App ID:  {native_app_id}", parent="content_group",
                      color=(130, 130, 155))
@@ -215,9 +215,9 @@ def _add_s2_details(ns_entry, shortcuts_data, vdf_path,
             )
 
     elif linux_native:
-        # Native Linux app — no Proton prefix needed
+        # Native Linux app -- no Proton prefix needed
         dpg.add_spacer(height=8, parent="content_group")
-        dpg.add_text("Native Linux app detected — no Proton prefix needed.",
+        dpg.add_text("Native Linux app detected -- no Proton prefix needed.",
                      parent="content_group", color=(130, 130, 155))
         dpg.add_input_text(tag=aid_tag, default_value="",
                            width=1, show=False, parent="content_group")
@@ -350,7 +350,7 @@ def _add_s2b_manifest(ns_entry, shortcuts_data, vdf_path,
     dpg.add_spacer(height=4, parent="content_group")
     dpg.add_group(tag=results_tag, parent="content_group")
 
-    # Auto-lookup by Steam app ID — faster and more reliable than name search
+    # Auto-lookup by Steam app ID -- faster and more reliable than name search
     if app_id:
         _lud_do_appid_search(app_id, results_tag, state)
 
@@ -400,7 +400,7 @@ def _lud_do_appid_search(app_id: str, results_tag: str, state: dict):
         if isinstance(result, list) and result and isinstance(result[0], tuple):
             return
         if result is None:
-            dpg.add_text(f"No app ID match found — search by name above.",
+            dpg.add_text(f"No app ID match found -- search by name above.",
                          parent=results_tag, color=(130, 130, 155))
             return
         name, entry = result
@@ -705,7 +705,7 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
             aid     = app_id
             drive_c = proton_drive_c(aid)
             if native_steam:
-                # Exe is provided by Steam via %command% at runtime — no path needed
+                # Exe is provided by Steam via %command% at runtime -- no path needed
                 exe_rel = ""
                 try:
                     save_rel = str(save_real.resolve().relative_to(drive_c.resolve()))

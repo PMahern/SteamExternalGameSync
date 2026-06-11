@@ -1,5 +1,5 @@
 """
-ExternalGameSync GUI — shared state, theme, navigation, widgets, and async helpers.
+ExternalGameSync GUI -- shared state, theme, navigation, widgets, and async helpers.
 """
 
 from __future__ import annotations
