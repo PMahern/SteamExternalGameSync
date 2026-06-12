@@ -528,13 +528,17 @@ def _write_launch_wrapper(game_name: str, savesync_bin: str,
                           game_id: str = "", game_exe_win: str = "",
                           disc_image: str = "",
                           prelauncher_linux: str = "",
-                          prelauncher_native: str = "") -> str:
+                          prelauncher_native: str = "",
+                          proton_shortcut: str = "") -> str:
     """Write a per-game shell wrapper.
 
     prelauncher_linux  -- path to pre-launcher.exe inside the Proton prefix
-                         (for Proton games; injected into the %command% verb chain)
+                         (for native Steam Proton games; injected into the %command% verb chain)
     prelauncher_native -- path to the native Linux pre-launcher binary
                          (for native Linux games/shortcuts; called as pre/post)
+    proton_shortcut    -- "1" for non-Steam Proton shortcuts where pre-launcher.exe is
+                         already the shortcut target exe (no injection needed; native
+                         pre-launcher runs as input-relay only, not pre/post phases)
     """
     wrapper_dir = Path.home() / ".local" / "share" / "externalgamesync" / "wrappers"
     wrapper_dir.mkdir(parents=True, exist_ok=True)
@@ -552,6 +556,7 @@ GAME_EXE_WIN="{game_exe_win}"
 DISC_IMAGE="{disc_image}"
 PRELAUNCHER="{prelauncher_linux}"
 PRELAUNCHER_NATIVE="{prelauncher_native}"
+PROTON_SHORTCUT="{proton_shortcut}"
 
 # IPC directory inside the Proton prefix (accessible from both Linux and Wine)
 _ipc_dir() {{
@@ -664,6 +669,13 @@ if [ -n "$PRELAUNCHER" ]; then
     fi
 fi
 
+# _USE_PROTON_PRELAUNCHER=1 when pre-launcher.exe is already in the Proton chain
+# (either injected for native Steam games, or as the shortcut target for non-Steam).
+# In both cases: input relay starts, wrapper runs chain directly, no Linux pre/post.
+_USE_PROTON_PRELAUNCHER=0
+[ "$_NATIVE_PRELAUNCHER" -eq 1 ] && _USE_PROTON_PRELAUNCHER=1
+[ "$PROTON_SHORTCUT" = "1" ] && _USE_PROTON_PRELAUNCHER=1
+
 # Detect gaming/Big Picture mode on the Linux side where env vars are reliable.
 # GAMESCOPE_WAYLAND_DISPLAY is set by gamescope (SteamOS/Bazzite gaming mode).
 # STEAM_GAMEPADUI is set by Steam when it propagates the flag to child processes.
@@ -729,7 +741,7 @@ _push_handler &
 # them from inside Wine.  On SteamOS/Bazzite (gamescope), XInput works natively
 # so the relay is skipped.
 _INPUT_RELAY_PID=""
-if [ "$_NATIVE_PRELAUNCHER" -eq 1 ] && [ -n "$PRELAUNCHER_NATIVE" ] && \\
+if [ "$_USE_PROTON_PRELAUNCHER" -eq 1 ] && [ -n "$PRELAUNCHER_NATIVE" ] && \\
    [ -f "$PRELAUNCHER_NATIVE" ] && [ -z "${{GAMESCOPE_WAYLAND_DISPLAY:-}}" ]; then
     # Kill any orphaned relay left over from a crashed previous run.
     pkill -f "$PRELAUNCHER_NATIVE input-relay" 2>/dev/null || true
@@ -751,9 +763,10 @@ fi
 LAUNCH_RC=0
 _CANCELLED=0
 
-if [ "$_NATIVE_PRELAUNCHER" -eq 1 ]; then
-    # FLOW 1: Proton pre-launcher.exe embedded in command chain.
-    "$SAVESYNC" log "[wrapper] FLOW1: starting Proton"
+if [ "$_USE_PROTON_PRELAUNCHER" -eq 1 ]; then
+    # FLOW 1/1B: Proton pre-launcher.exe embedded in command chain (injected for
+    # native Steam games, or already the shortcut target for non-Steam Proton games).
+    "$SAVESYNC" log "[wrapper] FLOW1: starting Proton (native=$_NATIVE_PRELAUNCHER proton_shortcut=$PROTON_SHORTCUT)"
     "${{_LAUNCH_CMD[@]}}"
     LAUNCH_RC=$?
     "$SAVESYNC" log "[wrapper] FLOW1: Proton exited rc=$LAUNCH_RC cancel=$([ -f "$CANCEL_FILE" ] && echo yes || echo no) push_start=$([ -f "$PUSH_START_FILE" ] && echo yes || echo no)"
@@ -1094,6 +1107,7 @@ def update_shortcut_launch(
                 game_exe_win=game_exe_win,
                 disc_image=disc_image,
                 prelauncher_native=prelauncher_native,
+                proton_shortcut="" if linux_native else "1",
             )
 
             env_vars    = (game_cfg or {}).get("env_vars", "").strip()
