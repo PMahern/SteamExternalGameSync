@@ -1006,6 +1006,29 @@ def add_non_steam_shortcut(exe_path: str, app_name: str) -> tuple[int | None, st
     return app_id_unsigned, next_idx, ""
 
 
+def get_compat_tool(app_id: int | str) -> str:
+    """Return the CompatToolMapping tool name for a non-Steam app, or '' if not set."""
+    steam_root = find_steam_root_windows() if sys.platform == "win32" else find_steam_root_linux()
+    if not steam_root:
+        return ""
+    config_path = steam_root / "config" / "config.vdf"
+    if not config_path.exists():
+        return ""
+    try:
+        import vdf as vdflib
+        with open(config_path, encoding="utf-8", errors="replace") as f:
+            data = vdflib.load(f)
+        compat_map = (data
+            .get("InstallConfigStore", data.get("installconfigstore", {}))
+            .get("Software", {})
+            .get("Valve", {})
+            .get("Steam", {})
+            .get("CompatToolMapping", {}))
+        return compat_map.get(str(app_id), {}).get("name", "")
+    except Exception:
+        return ""
+
+
 def set_compat_tool(app_id_unsigned: int, internal_name: str) -> tuple[bool, str]:
     """Write a CompatToolMapping entry to Steam's config.vdf for a non-Steam game."""
     from config import find_steam_root_windows
@@ -1176,6 +1199,14 @@ def update_shortcut_launch(
                 set_key("Exe", f'"{real_exe}"')
                 set_key("StartDir", f'"{str(Path(real_exe).parent)}"')
             set_key("LaunchOptions", launch_opts)
+
+            # Snapshot the current Proton compat tool so update-shortcuts can
+            # restore it if Steam cloud sync wipes config.vdf's CompatToolMapping.
+            if not linux_native and mc and mc.get("app_id") and game_cfg:
+                tool = get_compat_tool(mc["app_id"])
+                if tool and mc.get("proton_tool") != tool:
+                    mc["proton_tool"] = tool
+                    set_local_config(game_cfg["id"], mc)
 
         return write_shortcuts(shortcuts_data, vdf_path)
     except Exception as e:

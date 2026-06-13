@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import log, log_err, log_ok, LOG_FILE, SYNC_ROOT, hostname
 from games import find_game, load_games, save_games, get_local_save_path, hash_file, add_game_hash
-from machine_config import get_local_config, migrate_from_games_json
+from machine_config import get_local_config, set_local_config, migrate_from_games_json
 from rclone import rclone_push_games_json
 from sync import (
     rclone_sync_pull, rclone_sync_pull_force, rclone_sync_push, rclone_bisync,
@@ -472,6 +472,17 @@ def cmd_pre_launch(args):
         log_err(f"pre-launch: game not found: {game_id}")
         sys.exit(3)
 
+    # Refresh the saved Proton compat tool -- if the user changed it in Steam UI
+    # since the last run, keep the new choice so update-shortcuts can restore it
+    # if Steam cloud sync ever wipes config.vdf's CompatToolMapping.
+    mc = get_local_config(game_id)
+    if mc and mc.get("app_id") and mc.get("platform") not in ("windows", "linux_native"):
+        from steam import get_compat_tool
+        tool = get_compat_tool(mc["app_id"])
+        if tool and mc.get("proton_tool") != tool:
+            mc["proton_tool"] = tool
+            set_local_config(game_id, mc)
+
     def _write(status: str):
         try:
             preserved = {}
@@ -648,7 +659,7 @@ def cmd_update_shortcuts(args):
     """Regenerate Steam shortcuts and copy wrapper/pre-launcher for all locally configured games."""
     from steam import (
         read_shortcuts, get_non_steam_games, update_shortcut_launch,
-        update_native_game_launch,
+        update_native_game_launch, get_compat_tool, set_compat_tool,
     )
     from gui_common import SAVESYNC_BIN
 
@@ -718,6 +729,20 @@ def cmd_update_shortcuts(args):
                 game_cfg=game_cfg,
                 linux_native=_linux_native,
             )
+
+            # Check Proton compat tool is set; restore from machine config if wiped.
+            if ok and not _linux_native and app_id:
+                current_tool = get_compat_tool(app_id)
+                if not current_tool:
+                    saved_tool = mc.get("proton_tool", "")
+                    if saved_tool:
+                        ok2, msg2 = set_compat_tool(int(app_id), saved_tool)
+                        note = f"restored Proton tool '{saved_tool}'" if ok2 else f"could not restore Proton tool: {msg2}"
+                    else:
+                        note = "no Proton compat tool set -- open Steam > right-click shortcut > Properties > Compatibility"
+                    results.append((game_cfg["name"], ok, f"updated; {note}"))
+                    continue
+
             results.append((game_cfg["name"], ok, "updated" if ok else msg))
 
     if not results:
