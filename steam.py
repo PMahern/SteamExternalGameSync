@@ -577,6 +577,11 @@ CANCEL_FILE="$IPC_DIR/egs_cancelled.txt"
 PUSH_START_FILE="$IPC_DIR/egs_push_start.txt"
 PUSH_DONE_FILE="$IPC_DIR/egs_push_done.txt"
 
+# Diagnostic: log what Steam actually passes so we can see the real $@ and env
+"$SAVESYNC" log "[wrapper] STEAM_COMPAT_DATA_PATH=${{STEAM_COMPAT_DATA_PATH:-(unset)}}"
+"$SAVESYNC" log "[wrapper] IPC_DIR=$IPC_DIR"
+"$SAVESYNC" log "[wrapper] argc=$# args: $*"
+
 # Clean up stale IPC files from a previous run
 rm -f "$STATUS_FILE" "$CHOICE_FILE" "$READY_FILE" "$CANCEL_FILE" "$PUSH_START_FILE" "$PUSH_DONE_FILE"
 
