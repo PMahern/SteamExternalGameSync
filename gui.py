@@ -22,6 +22,7 @@ from gui_setup import flow_setup
 from gui_assign import flow_assign
 from gui_add import flow_add
 from gui_sync import flow_sync_art, flow_sync_all, flow_relink
+from gui_edit import flow_edit
 from gui_install import flow_install
 from gui_decky import flow_decky
 
@@ -34,6 +35,7 @@ def _build_sidebar():
         ("Home",           "home",     refresh_and_home),
         ("Add New Game Config",       "add",      flow_add),
         ("Assign Config",  "assign",   flow_assign),
+        ("Edit Game Config", "edit",   flow_edit),
         ("Sync Artwork",   "art",      flow_sync_art),
         ("Sync",           "sync_all", flow_sync_all),
         ("Relink Saves",   "relink",   flow_relink),
