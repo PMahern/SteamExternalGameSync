@@ -276,16 +276,52 @@ def show_error(title: str, message: str, on_done=None):
 
 # ── File picker ───────────────────────────────────────────────────────────────
 
+def _clean_picked_path(raw: str, current_path: str) -> str:
+    """Repair the mangled paths DearPyGui's file dialog can hand back.
+
+    With default_path set, DPG 2.x sometimes prefixes an already-absolute
+    selection with the dialog's own path, producing e.g.
+    "/home/user//home/user/Downloads/x.exe". Rebuilding from current_path plus
+    the basename is correct for a file selection and immune to that doubling.
+    """
+    raw = (raw or "").strip().strip('"')
+    if not raw:
+        return ""
+    if Path(raw).exists():
+        return raw
+
+    if current_path:
+        candidate = str(Path(current_path) / Path(raw).name)
+        if Path(candidate).exists():
+            return candidate
+
+    # Last resort: strip a duplicated absolute prefix ("/a/b//a/b/c" -> "/a/b/c").
+    idx = raw.find("/", 1)
+    while idx != -1:
+        tail = raw[idx:]
+        if tail.startswith("//"):
+            tail = tail[1:]
+        if tail != raw and Path(tail).exists():
+            return tail
+        idx = raw.find("/", idx + 1)
+
+    return raw
+
+
 def browse_into(input_tag: str, dir_only: bool, start: str | None):
     def _cb(sender, app_data, user_data):
+        current_path = app_data.get("current_path", "")
         if dir_only:
             # For directory_selector, file_path_name is the selected directory.
             # selections can contain the dir keyed by its own name, which causes
             # doubling if used directly (e.g. {"Saves": "/path/to/Saves"} → Saves/Saves).
             path = app_data.get("file_path_name", "").rstrip("/\\")
+            if path and not Path(path).exists():
+                path = _clean_picked_path(path, current_path)
         else:
             selections = app_data.get("selections", {})
             path = next(iter(selections.values()), "") if selections else app_data.get("file_path_name", "")
+            path = _clean_picked_path(path, current_path)
         if path and dpg.does_item_exist(user_data):
             dpg.set_value(user_data, path)
 

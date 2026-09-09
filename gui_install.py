@@ -108,6 +108,14 @@ def _install_s1():
             name = Path(exe).stem
         if not exe or not name:
             return
+        if not Path(exe).is_file():
+            show_error(
+                "Executable Not Found",
+                f"No file exists at:\n{exe}\n\n"
+                "Pick the file again, or paste the full path by hand.",
+                on_done=_install_s1,
+            )
+            return
         _install_s2(exe, name)
 
     add_action_bar("Next -->", _next)
