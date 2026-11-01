@@ -12,8 +12,12 @@
  *       -DSDL_MAIN_HANDLED
  *
  * Linux invocation (by the bash wrapper):
- *   pre-launcher pre   → pre-game phases; exits 0=ok, 1=cancelled
- *   pre-launcher post  → post-game phases (write push signal, show pushing/pushed)
+ *   pre-launcher run -- <cmd...>  → full flow: pre-game, run <cmd> and wait for its
+ *                                   whole process tree, post-game.  Spliced into the
+ *                                   Steam reaper chain like pre-launcher.exe is for Proton.
+ *   pre-launcher pre   → pre-game phases only; exits 0=ok, 1=cancelled (legacy wrappers)
+ *   pre-launcher post  → post-game phases only (write push signal, show pushing/pushed)
+ *   pre-launcher probe → exits 0 immediately; lets the wrapper check the binary loads
  *
  * Windows invocation (splice into Proton %command%):
  *   pre-launcher.exe   → full flow: pre-game, run_wait(game_exe), post-game
@@ -42,6 +46,11 @@
 #include <stdarg.h>
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <sys/prctl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 #endif
 
 #pragma GCC diagnostic push
@@ -60,6 +69,7 @@
 /* ── Diagnostic log ────────────────────────────────────────────────────────── */
 
 static FILE *g_diag = NULL;
+static char g_ipc_dir[4096] = {0}; /* set by ipc_init() */
 
 static void diag_open(void)
 {
@@ -76,8 +86,11 @@ static void diag_open(void)
         snprintf(path, sizeof(path), "%s\\egs_diag.txt", tmp); g_diag = fopen(path, "w");
     }
 #else
-    snprintf(path, sizeof(path), "/tmp/externalgamesync/egs_diag.txt");
+    /* Same dir the wrapper reads it back from ($IPC_DIR/egs_diag.txt).
+     * Close-on-exec so the launched game doesn't inherit the handle. */
+    snprintf(path, sizeof(path), "%s/egs_diag.txt", g_ipc_dir);
     g_diag = fopen(path, "w");
+    if (g_diag) fcntl(fileno(g_diag), F_SETFD, FD_CLOEXEC);
 #endif
     if (g_diag) { fprintf(g_diag, "=== ExternalGameSync Pre-Launcher (SDL2) ===\n"); fflush(g_diag); }
 }
@@ -90,8 +103,6 @@ static void diag(const char *fmt, ...)
 }
 
 /* ── IPC paths ─────────────────────────────────────────────────────────────── */
-
-static char g_ipc_dir[4096] = {0};
 
 static void ipc_init(void)
 {
@@ -1271,6 +1282,70 @@ static int run_wait(const char *exe)
 
 #endif /* _WIN32 */
 
+/* ── Linux-only: launch and wait for the game process tree ────────────────── */
+
+#ifndef _WIN32
+/* Linux counterpart of the Windows job object: become a child subreaper so any
+ * descendant that outlives the launched process (two-stage launchers that fork
+ * the real game and exit) is reparented here, then wait until none are left. */
+static int run_wait_linux(char **cmd)
+{
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1) != 0)
+        diag("run_wait: PR_SET_CHILD_SUBREAPER failed: %s", strerror(errno));
+
+    pid_t pid = fork();
+    if (pid < 0) { diag("run_wait: fork failed: %s", strerror(errno)); return -1; }
+    if (pid == 0) {
+        execvp(cmd[0], cmd);
+        fprintf(stderr, "pre-launcher: exec %s failed: %s\n", cmd[0], strerror(errno));
+        _exit(127);
+    }
+    diag("run_wait: pid %d: %s", (int)pid, cmd[0]);
+
+    int code = 0;
+    for (;;) {
+        int st;
+        pid_t w = waitpid(-1, &st, 0);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            break; /* ECHILD: the launched process and all adopted orphans are gone */
+        }
+        if (w == pid) {
+            code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+            diag("run_wait: launched process exited: %d", code);
+        } else {
+            diag("run_wait: descendant %d exited", (int)w);
+        }
+    }
+    return code;
+}
+#endif /* !_WIN32 */
+
+/* ── SDL lifetime ──────────────────────────────────────────────────────────── */
+
+static void sdl_init(void)
+{
+    /* Allow controller events regardless of window focus. */
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+#ifndef _WIN32
+    /* On Linux, HIDAPI is needed to see Steam's virtual gamepad in BPM.
+     * On Windows/Wine, Steam Input exposes XInput — HIDAPI can conflict. */
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+#endif
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
+    SDL_GameControllerEventState(SDL_ENABLE);
+    TTF_Init();
+}
+
+static void sdl_shutdown(void)
+{
+    window_close();
+    fonts_free();
+    controllers_close_all();
+    TTF_Quit();
+    SDL_Quit();
+}
+
 /* ── Entry point ───────────────────────────────────────────────────────────── */
 
 int main(int argc, char *argv[])
@@ -1278,6 +1353,8 @@ int main(int argc, char *argv[])
     SDL_SetMainReady();
 
 #ifndef _WIN32
+    if (argc >= 2 && !strcmp(argv[1], "probe")) return 0;
+
     /* input-relay: lightweight background process — no video, no window.
      * Must be handled before SDL_Init(VIDEO) to avoid creating a display connection. */
     if (argc >= 2 && !strcmp(argv[1], "input-relay")) {
@@ -1293,16 +1370,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    /* Allow controller events regardless of window focus. */
-    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-#ifndef _WIN32
-    /* On Linux, HIDAPI is needed to see Steam's virtual gamepad in BPM.
-     * On Windows/Wine, Steam Input exposes XInput — HIDAPI can conflict. */
-    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
-#endif
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
-    SDL_GameControllerEventState(SDL_ENABLE);
-    TTF_Init();
+    sdl_init();
 
     ipc_init();   /* must run before diag_open so /tmp/externalgamesync/ exists */
     diag_open();
@@ -1329,7 +1397,7 @@ int main(int argc, char *argv[])
     window_close();
     fonts_free();
 
-    if (cancelled) { diag("cancelled"); controllers_close_all(); TTF_Quit(); SDL_Quit(); return 1; }
+    if (cancelled) { diag("cancelled"); sdl_shutdown(); return 1; }
 
     int exit_code = 0;
     if (s.game_exe[0]) {
@@ -1341,18 +1409,35 @@ int main(int argc, char *argv[])
     }
 
     run_post_game();
-    window_close();
-    fonts_free();
-
-    controllers_close_all();
-    TTF_Quit();
-    SDL_Quit();
+    sdl_shutdown();
     return exit_code;
 
 #else
-    /* Linux: pre | post  (input-relay is handled above before SDL video init) */
+    /* Linux: run | pre | post  (probe/input-relay are handled above before SDL video init) */
     const char *mode = (argc >= 2) ? argv[1] : "pre";
     diag("mode: %s", mode);
+
+    if (!strcmp(mode, "run")) {
+        /* Full flow, mirroring the Windows build: pre-game, game, post-game. */
+        char **cmd = argv + 2;
+        if (cmd[0] && !strcmp(cmd[0], "--")) cmd++;
+        if (!cmd[0]) { diag("run: no command given"); sdl_shutdown(); return 1; }
+
+        int cancelled = run_pre_game(&s);
+        /* Shut SDL down completely while the game runs: releases the controller
+         * and display, and restores the default SIGTERM handler so Steam's Stop
+         * isn't swallowed as an SDL_QUIT nobody is polling for. */
+        sdl_shutdown();
+        if (cancelled) { diag("cancelled"); return 1; }
+
+        int exit_code = run_wait_linux(cmd);
+        diag("run_wait: %d", exit_code);
+
+        sdl_init();
+        run_post_game();
+        sdl_shutdown();
+        return exit_code;
+    }
 
     int rc = 0;
     if (!strcmp(mode, "post")) {
@@ -1361,11 +1446,7 @@ int main(int argc, char *argv[])
         rc = run_pre_game(&s);
     }
 
-    window_close();
-    fonts_free();
-    controllers_close_all();
-    TTF_Quit();
-    SDL_Quit();
+    sdl_shutdown();
     return rc; /* 0 = ok, 1 = cancelled */
 #endif
 }

@@ -139,6 +139,9 @@ The wrapper script calls `externalgamesync pull`, then `%command%` (the real gam
 6. **Pushing** (`setup_pushing`) — shown while Linux-side push runs. Polls `%TEMP%\egs_push_done.txt`.
 7. **Saves uploaded!** (`setup_pushed`) — brief 3-second auto-dismiss notification after push completes.
 
+### Native Linux games
+The same source builds a Linux binary (`pre-launcher/pre-launcher`, SDL2). For native Linux games/shortcuts the wrapper splices `pre-launcher run --` into `%command%` right after Steam's `reaper SteamLaunch AppId=N --` (where `pre-launcher.exe` sits for Proton), so Steam/gamescope treat its dialogs as the game's windows. `run` mode does the same phases as the Windows full flow; instead of a job object it sets `PR_SET_CHILD_SUBREAPER` and waits until every descendant exits. SDL is fully shut down while the game runs (frees the controller, restores default SIGTERM). The wrapper runs `pre-launcher probe` first and falls back to no-UI launch if the binary can't load. `pre`/`post` modes remain for older generated wrappers.
+
 ### IPC files (all in `%TEMP%`)
 | File | Written by | Meaning |
 |------|-----------|---------|

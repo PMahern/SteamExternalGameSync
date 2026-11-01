@@ -535,7 +535,8 @@ def _write_launch_wrapper(game_name: str, savesync_bin: str,
     prelauncher_linux  -- path to pre-launcher.exe inside the Proton prefix
                          (for native Steam Proton games; injected into the %command% verb chain)
     prelauncher_native -- path to the native Linux pre-launcher binary
-                         (for native Linux games/shortcuts; called as pre/post)
+                         (for native Linux games/shortcuts; spliced into the reaper
+                         chain as "pre-launcher run --")
     proton_shortcut    -- "1" for non-Steam Proton shortcuts where pre-launcher.exe is
                          already the shortcut target exe (no injection needed; native
                          pre-launcher runs as input-relay only, not pre/post phases)
@@ -681,6 +682,39 @@ _USE_PROTON_PRELAUNCHER=0
 [ "$_NATIVE_PRELAUNCHER" -eq 1 ] && _USE_PROTON_PRELAUNCHER=1
 [ "$PROTON_SHORTCUT" = "1" ] && _USE_PROTON_PRELAUNCHER=1
 
+# For native Linux games: splice "pre-launcher run --" into %command% right after
+# Steam's "reaper SteamLaunch AppId=N --", the same spot pre-launcher.exe occupies
+# in the Proton chain.  The pre-launcher then runs the rest of the chain (Steam
+# Linux Runtime entry point, if any, then the game) as its child, so Steam and
+# gamescope treat its dialogs as the game's own windows.  It stays outside the
+# runtime container so it uses host SDL2/fonts.  If no reaper is present (older
+# Steam), it wraps the whole command instead.  The probe skips it entirely if the
+# binary can't load (e.g. SDL2 missing), so the game still launches.
+_USE_LINUX_PRELAUNCHER=0
+if [ "$_USE_PROTON_PRELAUNCHER" -eq 0 ] && [ -n "$PRELAUNCHER_NATIVE" ] && \\
+   [ -x "$PRELAUNCHER_NATIVE" ] && "$PRELAUNCHER_NATIVE" probe >/dev/null 2>&1; then
+    _new_cmd=()
+    _found_reaper=0
+    for _arg in "$@"; do
+        _new_cmd+=("$_arg")
+        case "$_found_reaper" in
+            0) [ "$_arg" = "SteamLaunch" ] && _found_reaper=1 ;;
+            1) if [ "$_arg" = "--" ]; then
+                   _new_cmd+=("$PRELAUNCHER_NATIVE" run --)
+                   _found_reaper=2
+               fi ;;
+        esac
+    done
+    if [ "$_found_reaper" -eq 2 ]; then
+        _LAUNCH_CMD=("${{_new_cmd[@]}}")
+    else
+        _LAUNCH_CMD=("$PRELAUNCHER_NATIVE" run -- "$@")
+        "$SAVESYNC" log "[wrapper] native Linux: reaper not found, wrapping whole command"
+    fi
+    _USE_LINUX_PRELAUNCHER=1
+    "$SAVESYNC" log "[wrapper] native Linux: launch cmd: ${{_LAUNCH_CMD[*]}}"
+fi
+
 # Detect gaming/Big Picture mode on the Linux side where env vars are reliable.
 # GAMESCOPE_WAYLAND_DISPLAY is set by gamescope (SteamOS/Bazzite gaming mode).
 # STEAM_GAMEPADUI is set by Steam when it propagates the flag to child processes.
@@ -762,8 +796,8 @@ fi
 #   pre-launcher.exe is spliced into the Proton verb chain; it handles sync UI,
 #   game launch, and push signalling internally. Wrapper just waits.
 # FLOW 2 -- Linux native pre-launcher (native Linux game or non-Steam shortcut):
-#   pre-launcher binary runs as two sub-commands: "pre" (sync UI, blocks until
-#   done or cancelled) then "post" (push UI, writes PUSH_START_FILE internally).
+#   "pre-launcher run" is spliced into the reaper chain; like FLOW 1 it handles
+#   sync UI, runs the game (waiting for its whole process tree), and push UI.
 # FLOW 3 -- No pre-launcher: background handlers run silently, no UI.
 LAUNCH_RC=0
 _CANCELLED=0
@@ -780,22 +814,17 @@ if [ "$_USE_PROTON_PRELAUNCHER" -eq 1 ]; then
     # Fallback: ensure push runs if pre-launcher.exe crashed without signalling
     [ ! -f "$CANCEL_FILE" ] && touch "$PUSH_START_FILE"
     "$SAVESYNC" log "[wrapper] FLOW1: push_start after fallback=$([ -f "$PUSH_START_FILE" ] && echo yes || echo no)"
-elif [ -n "$PRELAUNCHER_NATIVE" ] && [ -f "$PRELAUNCHER_NATIVE" ]; then
-    # FLOW 2: Linux native pre-launcher -- pre phase (blocks)
-    "$PRELAUNCHER_NATIVE" pre
-    PL_RC=$?
-    if [ $PL_RC -ne 0 ]; then
-        "$SAVESYNC" log "[wrapper] pre-launcher cancelled launch"
-        touch "$CANCEL_FILE"
+elif [ "$_USE_LINUX_PRELAUNCHER" -eq 1 ]; then
+    # FLOW 2: Linux native pre-launcher embedded in the reaper chain
+    "$SAVESYNC" log "[wrapper] FLOW2: starting native pre-launcher chain"
+    "${{_LAUNCH_CMD[@]}}"
+    LAUNCH_RC=$?
+    "$SAVESYNC" log "[wrapper] FLOW2: chain exited rc=$LAUNCH_RC cancel=$([ -f "$CANCEL_FILE" ] && echo yes || echo no)"
+    if [ -f "$CANCEL_FILE" ]; then
         _CANCELLED=1
     else
-        # Launch the game directly
-        "${{_LAUNCH_CMD[@]}}"
-        LAUNCH_RC=$?
-        "$SAVESYNC" log "[wrapper] game exited rc=$LAUNCH_RC"
-        # Post phase: shows push UI and writes PUSH_START_FILE; _push_handler does the actual push
-        "$PRELAUNCHER_NATIVE" post
-        "$SAVESYNC" log "[wrapper] post pre-launcher done"
+        # Fallback: ensure push runs if the pre-launcher crashed without signalling
+        touch "$PUSH_START_FILE"
     fi
 else
     # FLOW 3: No pre-launcher -- launch directly and signal push
