@@ -947,6 +947,7 @@ def cmd_install_decky(args):
         if src_map.exists():
             shutil.copy2(src_map, dest / "dist" / "index.js.map")
 
+    used_sudo = False
     try:
         _install()
     except PermissionError:
@@ -968,16 +969,23 @@ def cmd_install_decky(args):
             if r.returncode != 0:
                 print(f"Failed: {' '.join(cmd)}")
                 sys.exit(1)
+        used_sudo = True
 
     print(f"Installed: {dest}")
 
-    # Restart the Decky plugin-loader service so the new version is active immediately
-    r = subprocess.run(["systemctl", "restart", "plugin_loader"], capture_output=True)
-    if r.returncode == 0:
+    # Restart the Decky plugin-loader service so the new version is active immediately.
+    # If sudo was already used above, reuse its cached credentials; otherwise try
+    # unprivileged with --no-ask-password so polkit doesn't pop up a second
+    # (graphical) password prompt on top of sudo's terminal one.
+    r = None
+    if not used_sudo:
+        r = subprocess.run(["systemctl", "--no-ask-password", "restart", "plugin_loader"],
+                           capture_output=True)
+    if r is not None and r.returncode == 0:
         print("plugin_loader service restarted.")
     else:
         # May need sudo on some setups
-        r2 = subprocess.run(["sudo", "systemctl", "restart", "plugin_loader"], capture_output=True)
+        r2 = subprocess.run(["sudo", "systemctl", "restart", "plugin_loader"])
         if r2.returncode == 0:
             print("plugin_loader service restarted (via sudo).")
         else:
