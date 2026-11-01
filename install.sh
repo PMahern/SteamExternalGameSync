@@ -75,28 +75,88 @@ echo ""
 echo "Checking Python dependencies..."
 
 # ── pip packages: vdf + dearpygui ────────────────────────────────────────────
+# dearpygui ships binary wheels only (no sdist), so if the system Python is newer
+# than the newest wheel (e.g. a fresh Fedora/Bazzite release) pip cannot install
+# it at all. In that case we fall back to a private venv built on a uv-managed
+# Python that dearpygui supports. Everything lives under $APP_DIR; no root needed.
+VENV_DIR="$APP_DIR/venv"
+UV_FALLBACK_PYTHON="3.13"
+
+# Re-runs: if a previous install created a working venv, check/install into it
+PY=python3
+[[ -x "$VENV_DIR/bin/python3" ]] && "$VENV_DIR/bin/python3" -c "" 2>/dev/null && PY="$VENV_DIR/bin/python3"
+
+_write_launcher() {
+    cat > "$BIN_DIR/externalgamesync" << VENV_LAUNCHER
+#!/usr/bin/env bash
+exec "$1" "$APP_DIR/externalgamesync.py" "\$@"
+VENV_LAUNCHER
+    chmod +x "$BIN_DIR/externalgamesync"
+}
+
+_find_uv() {
+    if command -v uv &>/dev/null; then command -v uv; return 0; fi
+    if [[ -x "$APP_DIR/bin/uv" ]]; then echo "$APP_DIR/bin/uv"; return 0; fi
+    local arch tmp
+    arch=$(uname -m)
+    tmp=$(mktemp -d)
+    echo "  Downloading uv (Python manager)..." >&2
+    if curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-${arch}-unknown-linux-gnu.tar.gz" \
+            -o "$tmp/uv.tar.gz" && tar -xzf "$tmp/uv.tar.gz" -C "$tmp"; then
+        mkdir -p "$APP_DIR/bin"
+        cp "$tmp"/uv-*/uv "$APP_DIR/bin/uv"
+        chmod +x "$APP_DIR/bin/uv"
+        rm -rf "$tmp"
+        echo "$APP_DIR/bin/uv"
+        return 0
+    fi
+    rm -rf "$tmp"
+    return 1
+}
+
+# Build $VENV_DIR on a uv-managed Python and install the given packages into it
+_install_with_uv() {
+    local uv
+    uv=$(_find_uv) || { echo "[error] Could not download uv." >&2; return 1; }
+    export UV_PYTHON_INSTALL_DIR="$APP_DIR/python"
+    rm -rf "$VENV_DIR"
+    "$uv" venv --seed --python "$UV_FALLBACK_PYTHON" "$VENV_DIR" -q || return 1
+    "$uv" pip install --python "$VENV_DIR/bin/python3" -q vdf dearpygui PyYAML supabase || return 1
+    PY="$VENV_DIR/bin/python3"
+    _write_launcher "$PY"
+}
+
 _missing_pkgs=()
-python3 -c "import vdf" 2>/dev/null       || _missing_pkgs+=(vdf)
-python3 -c "import dearpygui" 2>/dev/null || _missing_pkgs+=(dearpygui)
-python3 -c "import yaml" 2>/dev/null      || _missing_pkgs+=(PyYAML)
-python3 -c "import supabase" 2>/dev/null  || _missing_pkgs+=(supabase)
+"$PY" -c "import vdf" 2>/dev/null       || _missing_pkgs+=(vdf)
+"$PY" -c "import dearpygui" 2>/dev/null || _missing_pkgs+=(dearpygui)
+"$PY" -c "import yaml" 2>/dev/null      || _missing_pkgs+=(PyYAML)
+"$PY" -c "import supabase" 2>/dev/null  || _missing_pkgs+=(supabase)
 
 if [[ ${#_missing_pkgs[@]} -eq 0 ]]; then
-    echo "✓ Python packages: vdf, dearpygui, PyYAML"
+    echo "✓ Python packages: vdf, dearpygui, PyYAML, supabase"
+    [[ "$PY" != python3 ]] && _write_launcher "$PY"
 else
     echo "Installing Python packages: ${_missing_pkgs[*]}..."
-    if python3 -m pip install --user "${_missing_pkgs[@]}" 2>/dev/null; then
-        echo "✓ Installed: ${_missing_pkgs[*]}"
-    else
-        echo "  pip --user failed, trying virtual environment..."
-        python3 -m venv "$APP_DIR/venv" --system-site-packages
-        "$APP_DIR/venv/bin/pip" install "${_missing_pkgs[@]}" -q
-        cat > "$BIN_DIR/externalgamesync" << VENV_LAUNCHER
-#!/usr/bin/env bash
-exec "$APP_DIR/venv/bin/python3" "$APP_DIR/externalgamesync.py" "\$@"
-VENV_LAUNCHER
-        chmod +x "$BIN_DIR/externalgamesync"
+    if [[ "$PY" != python3 ]] && "$VENV_DIR/bin/python3" -m pip install "${_missing_pkgs[@]}" -q; then
+        _write_launcher "$PY"
         echo "✓ Installed in venv: ${_missing_pkgs[*]}"
+    elif [[ "$PY" == python3 ]] && python3 -m pip install --user "${_missing_pkgs[@]}" 2>/dev/null; then
+        echo "✓ Installed: ${_missing_pkgs[*]}"
+    elif [[ "$PY" == python3 ]] && echo "  pip --user failed, trying virtual environment..." \
+            && python3 -m venv "$VENV_DIR" --system-site-packages \
+            && "$VENV_DIR/bin/pip" install "${_missing_pkgs[@]}" -q; then
+        PY="$VENV_DIR/bin/python3"
+        _write_launcher "$PY"
+        echo "✓ Installed in venv: ${_missing_pkgs[*]}"
+    else
+        echo "  No compatible packages for $(python3 --version) — setting up Python $UV_FALLBACK_PYTHON instead..."
+        if _install_with_uv; then
+            echo "✓ Installed in venv (Python $UV_FALLBACK_PYTHON): vdf, dearpygui, PyYAML, supabase"
+        else
+            echo "[error] Could not install Python packages. The GUI will not work."
+            echo "        See the output above for details."
+            exit 1
+        fi
     fi
 fi
 
@@ -117,11 +177,11 @@ _install_pygame() {
     return 1
 }
 
-if python3 -c "import pygame" 2>/dev/null; then
+if PYGAME_HIDE_SUPPORT_PROMPT=1 "$PY" -c "import pygame" 2>/dev/null; then
     echo "✓ pygame available"
-elif [[ -x "$APP_DIR/venv/bin/pip" ]]; then
-    if ! _install_pygame "$APP_DIR/venv/bin/pip" install; then
-        echo "[warn] No pygame wheel for $(python3 --version) — prelaunch dialogs will use zenity"
+elif [[ "$PY" != python3 ]]; then
+    if ! _install_pygame "$PY" -m pip install -q; then
+        echo "[warn] No pygame wheel for $("$PY" --version) — prelaunch dialogs will use zenity"
     fi
 elif ! _install_pygame python3 -m pip install --user; then
     echo "[warn] No pygame wheel for $(python3 --version) — prelaunch dialogs will use zenity"
