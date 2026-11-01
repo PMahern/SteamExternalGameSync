@@ -1213,6 +1213,87 @@ def update_shortcut_launch(
         return False, f"Failed to update shortcut: {e}"
 
 
+def launch_wrapper_path(game_name: str) -> Path:
+    """Path of the launch wrapper written by _write_launch_wrapper[_win] for this game."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ExternalGameSync"
+        return base / "wrappers" / f"{game_id_from_name(game_name)}.py"
+    return (Path.home() / ".local" / "share" / "externalgamesync" / "wrappers"
+            / f"{game_id_from_name(game_name)}.sh")
+
+
+def _uses_wrapper(launch_opts: str, wrapper: Path) -> bool:
+    if sys.platform == "win32":
+        return str(wrapper).lower() in launch_opts.lower()
+    return str(wrapper) in launch_opts
+
+
+def restore_steam_launch(game_cfg: dict, mc: dict) -> tuple[bool, str]:
+    """Undo update_shortcut_launch / update_native_game_launch for this game.
+    Only touches Steam entries whose launch options still point at THIS game's
+    wrapper, so a shortcut since reassigned to another config is left alone."""
+    wrapper  = launch_wrapper_path(game_cfg["name"])
+    env_vars = game_cfg.get("env_vars", "").strip() if sys.platform != "win32" else ""
+    plain_opts = f"{env_vars} %command%" if env_vars else ""
+
+    if mc.get("native_steam"):
+        app_id = str(mc.get("app_id", ""))
+        if not app_id:
+            return False, "no app_id in machine config"
+        if not _uses_wrapper(get_native_launch_options(app_id), wrapper):
+            return True, "Steam launch options don't use this config -- left unchanged"
+        ok, msg = set_native_launch_options(app_id, plain_opts)
+        return ok, "Steam launch options restored" if ok else msg
+
+    shortcuts_data, vdf_path = read_shortcuts()
+    if not shortcuts_data:
+        return False, "could not read shortcuts.vdf"
+    matches = [ns for ns in get_non_steam_games(shortcuts_data)
+               if _uses_wrapper(ns["launch_options"], wrapper)]
+    if not matches:
+        return True, "no Steam shortcut uses this config -- left unchanged"
+
+    platform = mc.get("platform")
+    if platform == "windows":
+        real_exe    = mc.get("exe_path", "")
+        launch_opts = ""
+    elif platform == "linux_native":
+        real_exe    = mc.get("shortcut_exe", "")
+        launch_opts = mc.get("shortcut_args", "")
+    else:
+        exe_rel     = game_cfg.get("exe_path", "")
+        launch_opts = plain_opts
+        try:
+            real_exe = str(resolve_exe_path(mc["app_id"], exe_rel)) if exe_rel and mc.get("app_id") else ""
+        except Exception:
+            real_exe = ""  # prefix gone (game uninstalled?) -- still unhook the shortcut
+
+    shortcuts = shortcuts_data.get("shortcuts", shortcuts_data.get("Shortcuts", {}))
+    for ns in matches:
+        entry = shortcuts[ns["index"]]
+
+        def set_key(preferred, value):
+            for k in [preferred, preferred.lower(), preferred.capitalize()]:
+                if k in entry:
+                    entry[k] = value
+                    return
+            entry[preferred] = value
+
+        if real_exe:
+            set_key("Exe", f'"{real_exe}"')
+            set_key("StartDir", f'"{str(Path(real_exe).parent)}"')
+        set_key("LaunchOptions", launch_opts)
+        log(f"Restored shortcut '{ns['name']}' (exe={real_exe or '(unchanged)'})")
+
+    ok, msg = write_shortcuts(shortcuts_data, vdf_path)
+    if not ok:
+        return False, msg
+    names = ", ".join(f"'{ns['name']}'" for ns in matches)
+    if not real_exe:
+        return True, f"Steam shortcut {names} unhooked, but the original exe is unknown -- check its target in Steam"
+    return True, f"Steam shortcut {names} restored"
+
+
 # ── Native Steam game support ─────────────────────────────────────────────────
 
 def _find_all_steamapps_dirs() -> list[Path]:

@@ -13,7 +13,7 @@ import dearpygui.dearpygui as dpg
 from machine_config import get_local_config, set_local_config
 from games import load_games, save_games, game_id_from_name, hash_file
 import rclone as rclone_mod
-from sync import rclone_sync_pull, rclone_sync_push
+from sync import initial_sync
 from steam import (
     read_shortcuts, get_non_steam_games, update_shortcut_launch,
     proton_drive_c, make_save_symlink, make_save_symlink_native,
@@ -778,9 +778,7 @@ def _add_run(ns_entry, shortcuts_data, vdf_path,
             log.append((f"Save symlink {'created' if ok_lnk else 'failed: ' + msg_lnk}",
                         ok_lnk))
 
-        ok1, _ = rclone_sync_pull(game_id, new_cfg)
-        ok2, _ = rclone_sync_push(game_id, new_cfg)
-        log.append(("Initial sync", ok1 and ok2))
+        log.append(initial_sync(game_id, new_cfg))
 
         if native_steam:
             ok3, msg3 = update_native_game_launch(

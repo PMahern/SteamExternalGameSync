@@ -12,15 +12,18 @@ Each game has a config in `games.json` on the remote (shared, no machine-specifi
 | `rclone.py` | rclone availability/setup (WebDAV + SFTP), games.json push/pull/merge |
 | `sync.py` | Save snapshots, conflict detection, backup, pull/push sync ops, GameLock |
 | `steam.py` | Proton path resolution, symlinks, shortcuts.vdf read/write, launch wrappers |
+| `remove.py` | Unassign a game from this machine / delete a config everywhere (tombstones) |
 | `artwork.py` | Steam grid artwork push/pull via cloud storage |
 | `gui_common.py` | DPG theme, nav state, shared widgets, async helpers, Win/Proton path helpers |
 | `gui_setup.py` | Cloud storage setup flow |
 | `gui_home.py` | Home dashboard, navigation guard |
 | `gui_assign.py` | Assign existing cloud config to a Steam shortcut |
 | `gui_add.py` | Create new game config from a Steam shortcut |
+| `gui_remove.py` | Remove / Unassign flow |
 | `gui_sync.py` | Sync all saves, sync artwork, relink symlinks |
+| `gui_history.py` | Save History: list backups, restore one everywhere |
 | `gui.py` | Window layout, sidebar, entry point (`main()`) |
-| `externalgamesync.py` | CLI entry point: `launch`, `pull`, `push`, `sync`, `list`, `log`, `gui` commands |
+| `externalgamesync.py` | CLI entry point: `launch`, `pull`, `push`, `sync`, `list`, `unassign`, `delete`, `history`, `restore`, `log`, `gui` commands |
 
 ## Key data structures
 
@@ -38,6 +41,7 @@ Each game has a config in `games.json` on the remote (shared, no machine-specifi
   }]
 }
 ```
+Deleted games stay as tombstones `{"id", "name", "deleted": true, "added": <delete time>}` so the deletion wins the newer-`added`-wins merge on every machine. `load_games()` hides them; `rclone.py` merges with `include_deleted=True`.
 
 ### machine_configs.json (local only — APP_CONFIG_DIR/machine_configs.json)
 ```json
@@ -90,12 +94,20 @@ Windows entries additionally store absolute paths since they vary by username/in
 - **flow_sync_art** — push/pull Steam grid artwork via cloud storage
 - **flow_sync_all** — pull + push all games
 - **flow_relink** — recreate symlinks (Linux only, after reinstall)
+- **flow_history** — list a game's backups and restore one to this machine + cloud
 
 ## Save sync mechanism
 - Linux: `SYNC_ROOT/saves/<game_id>/` is a **symlink** pointing to the Proton save directory
 - Windows: rclone syncs directly to/from the absolute `save_path` stored in machine_configs
 - rclone remote: `externalgamesync_nc:ExternalGameSync/`
 - Conflict detection uses snapshot files in `APP_CONFIG_DIR/snapshots/`
+- Pull skips the transfer when the cloud is unchanged since the last sync (so local edits aren't reverted); push skips when local is unchanged. Initial sync after assign/add never pushes over a conflict.
+
+## Save history / backups
+- Before every push that changes the cloud, the current cloud copy goes to `saves_backup/<game_id>/<YYYYMMDD_HHMMSS>/`
+- Before a pull overwrites unsynced local changes (or a conflict resolve), local goes to `APP_CONFIG_DIR/backups/<game_id>/<ts>/`
+- Each side keeps the newest `save_history_keep` (settings.json, default 10); `deleted_<ts>` folders from remove.py are never pruned
+- `restore_save_backup` backs up both sides, copies the backup into the local save folder, sets every file's mtime to now, then force-pushes, so other machines see the cloud as changed and pull it
 
 ## Steam launch integration
 Steam shortcut Launch Options are rewritten to:

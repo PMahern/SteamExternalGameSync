@@ -12,18 +12,38 @@ from pathlib import Path
 from config import SYNC_ROOT, GAMES_JSON
 
 
-def load_games() -> list[dict]:
-    """Load game configs from the synced games.json."""
+def load_games(include_deleted: bool = False) -> list[dict]:
+    """Load game configs from the synced games.json.
+    Deleted games are kept as tombstones ({"deleted": true}) so the deletion wins the
+    timestamp merge on other machines; they are hidden unless include_deleted is set."""
     SYNC_ROOT.mkdir(parents=True, exist_ok=True)
     if GAMES_JSON.exists():
         data = json.loads(GAMES_JSON.read_text())
-        return data.get("games", [])
+        games = data.get("games", [])
+        return games if include_deleted else [g for g in games if not g.get("deleted")]
     return []
 
 def save_games(games: list[dict]):
-    """Write games list back to games.json (will be picked up by next sync)."""
+    """Write games list back to games.json (will be picked up by next sync).
+    Tombstones already on disk are preserved unless `games` contains that id."""
     SYNC_ROOT.mkdir(parents=True, exist_ok=True)
-    GAMES_JSON.write_text(json.dumps({"games": games}, indent=2))
+    ids = {g["id"] for g in games}
+    tombstones = [g for g in load_games(include_deleted=True)
+                  if g.get("deleted") and g["id"] not in ids]
+    GAMES_JSON.write_text(json.dumps({"games": games + tombstones}, indent=2))
+
+def delete_game(game_id: str) -> bool:
+    """Replace a game config with a tombstone. Returns False if the id isn't known.
+    The fresh 'added' timestamp makes the tombstone win merge_games() everywhere."""
+    from datetime import datetime
+    games = load_games(include_deleted=True)
+    for i, g in enumerate(games):
+        if g["id"] == game_id:
+            games[i] = {"id": game_id, "name": g.get("name", game_id), "deleted": True,
+                        "added": datetime.now().isoformat()}
+            save_games(games)
+            return True
+    return False
 
 def find_game(identifier: str) -> dict | None:
     """Find a game config by id or name (case-insensitive)."""

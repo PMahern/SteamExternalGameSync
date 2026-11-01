@@ -12,7 +12,7 @@ import dearpygui.dearpygui as dpg
 from games import load_games, save_games
 from machine_config import get_local_config, set_local_config
 import rclone as rclone_mod
-from sync import rclone_sync_pull, rclone_sync_push
+from sync import initial_sync
 from steam import (
     read_shortcuts, get_non_steam_games, update_shortcut_launch,
     resolve_exe_path, resolve_save_path, proton_drive_c, get_proton_base,
@@ -365,14 +365,8 @@ def _assign_s3_paths(game_cfg: dict, ns_entry, shortcuts_data, vdf_path,
             # Pre-fill save path by expanding XDG vars from the shared games.json entry
             _sp = game_cfg.get("save_path", "")
             if _sp:
-                _h = Path.home()
-                for _var, _val in [
-                    ("<xdgData>",   str(_h / ".local" / "share")),
-                    ("<xdgConfig>", str(_h / ".config")),
-                    ("<xdgCache>",  str(_h / ".cache")),
-                    ("<home>",      str(_h)),
-                ]:
-                    _sp = _sp.replace(_var, _val)
+                from ludusavi import expand_linux_home_path
+                _sp = expand_linux_home_path(_sp)
                 if "<" not in _sp:
                     auto_save_val = _sp
         elif native_steam and native_app_id:
@@ -622,9 +616,7 @@ def _assign_run(game_cfg, ns_entry, shortcuts_data, vdf_path,
             del machine_cfg["disc_image"]
         set_local_config(game_cfg["id"], machine_cfg)
 
-        ok1, _ = rclone_sync_pull(game_cfg["id"], game_cfg)
-        ok2, _ = rclone_sync_push(game_cfg["id"], game_cfg)
-        log.append(("Initial sync", ok1 and ok2))
+        log.append(initial_sync(game_cfg["id"], game_cfg))
 
         if native_steam:
             ok3, msg3 = update_native_game_launch(

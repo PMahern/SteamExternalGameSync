@@ -23,6 +23,8 @@ from gui_assign import flow_assign
 from gui_add import flow_add
 from gui_sync import flow_sync_art, flow_sync_all, flow_relink
 from gui_edit import flow_edit
+from gui_remove import flow_remove
+from gui_history import flow_history
 from gui_install import flow_install
 from gui_decky import flow_decky
 
@@ -36,8 +38,10 @@ def _build_sidebar():
         ("Add New Game Config",       "add",      flow_add),
         ("Assign Config",  "assign",   flow_assign),
         ("Edit Game Config", "edit",   flow_edit),
+        ("Remove / Unassign", "remove", flow_remove),
         ("Sync Artwork",   "art",      flow_sync_art),
         ("Sync",           "sync_all", flow_sync_all),
+        ("Save History",   "history",  flow_history),
         ("Relink Saves",   "relink",   flow_relink),
     ]
     if sys.platform != "win32":

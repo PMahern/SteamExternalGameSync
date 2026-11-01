@@ -389,6 +389,87 @@ class Plugin:
 
         return result
 
+    # ── get_save_history ──────────────────────────────────────────────────────
+
+    async def get_save_history(self, game_id: str) -> dict[str, Any]:
+        """
+        List a game's save backups (cloud + this machine), newest first.
+        Returns {"entries": [{source, name, when, deleted, files, size, newest_file}],
+                 "cloud_ok": bool, "keep": int, "error": str|None}
+        Dates are pre-formatted "YYYY-MM-DD HH:MM" strings (or null).
+        """
+        if not _ensure_path():
+            return {"entries": [], "cloud_ok": False, "keep": 0, "error": "ExternalGameSync not installed"}
+
+        loop = asyncio.get_running_loop()
+
+        def _work() -> dict[str, Any]:
+            from sync import list_save_history, history_keep
+            fmt = lambda dt: dt.strftime("%Y-%m-%d %H:%M") if dt else None
+            entries, cloud_ok = list_save_history(game_id)
+            return {
+                "entries": [
+                    {
+                        "source":      e["source"],
+                        "name":        e["name"],
+                        "when":        fmt(e["when"]),
+                        "deleted":     e["deleted"],
+                        "files":       e["files"],
+                        "size":        e["size"],
+                        "newest_file": fmt(e["newest_file"]),
+                    }
+                    for e in entries
+                ],
+                "cloud_ok": cloud_ok,
+                "keep":     history_keep(),
+                "error":    None,
+            }
+
+        try:
+            return await loop.run_in_executor(None, _work)
+        except Exception as exc:
+            logger.error("get_save_history %s: %s", game_id, exc)
+            return {"entries": [], "cloud_ok": False, "keep": 0, "error": str(exc)}
+
+    # ── restore_backup ────────────────────────────────────────────────────────
+
+    async def restore_backup(self, game_id: str, source: str, name: str) -> dict[str, Any]:
+        """
+        Restore a backup from get_save_history onto this machine and the cloud.
+        Current saves on both sides are backed up first.
+        Returns {"ok": bool, "lines": [{"msg": str, "ok": bool}]}
+        """
+        if not _ensure_path():
+            return {"ok": False, "lines": [{"msg": "ExternalGameSync not installed", "ok": False}]}
+
+        loop = asyncio.get_running_loop()
+
+        try:
+            from games import find_game
+            from sync import restore_save_backup
+        except ImportError as exc:
+            return {"ok": False, "lines": [{"msg": str(exc), "ok": False}]}
+
+        game = find_game(game_id)
+        if not game:
+            return {"ok": False, "lines": [{"msg": f"Game not found: {game_id}", "ok": False}]}
+        if source not in ("cloud", "local"):
+            return {"ok": False, "lines": [{"msg": f"Bad backup source: {source}", "ok": False}]}
+
+        try:
+            results = await loop.run_in_executor(
+                None,
+                lambda: restore_save_backup(game_id, {"source": source, "name": name}, game),
+            )
+        except Exception as exc:
+            logger.error("restore_backup %s %s/%s: %s", game_id, source, name, exc)
+            return {"ok": False, "lines": [{"msg": str(exc), "ok": False}]}
+
+        return {
+            "ok":    all(ok for _, ok in results),
+            "lines": [{"msg": msg, "ok": ok} for msg, ok in results],
+        }
+
     # ── resolve_conflict ──────────────────────────────────────────────────────
 
     async def resolve_conflict(self, game_id: str, keep: str) -> dict[str, Any]:

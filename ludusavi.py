@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -242,13 +243,16 @@ def normalize_path_for_storage(path: str | Path) -> str:
     """
     if sys.platform != "win32":
         p = str(path)
-        h = str(Path.home())
-        xdg_subs = [
-            (str(Path.home() / ".local" / "share"), "<xdgData>"),
-            (str(Path.home() / ".config"),          "<xdgConfig>"),
-            (str(Path.home() / ".cache"),           "<xdgCache>"),
-            (h,                                      "<home>"),
-        ]
+        # Match both the $HOME form and the resolved form: on Bazzite/Silverblue
+        # /home is a symlink to /var/home, so resolved picks look like /var/home/<user>.
+        xdg_subs = []
+        for h in {Path.home(), Path.home().resolve()}:
+            xdg_subs += [
+                (str(h / ".local" / "share"), "<xdgData>"),
+                (str(h / ".config"),          "<xdgConfig>"),
+                (str(h / ".cache"),           "<xdgCache>"),
+                (str(h),                      "<home>"),
+            ]
         for real, var in sorted(xdg_subs, key=lambda x: len(x[0]), reverse=True):
             if p.startswith(real + "/"):
                 return var + "/" + p[len(real) + 1:]
@@ -317,6 +321,31 @@ def normalize_path_for_storage(path: str | Path) -> str:
         if pl == prefix.lower():
             return var
 
+    return p
+
+
+_FOREIGN_HOME_RE = re.compile(r"^(?:/var)?/home/[^/]+(?=/|$)")
+
+
+def expand_linux_home_path(path_str: str) -> str:
+    """Expand a stored Linux save path for this machine: <home>/<xdg*> variables
+    and ~ become this user's dirs, and an absolute path under some other user's
+    home (/home/<user>/... or /var/home/<user>/..., e.g. a config created on another
+    machine before paths were stored portably) is remapped onto this user's home."""
+    h = Path.home()
+    p = path_str
+    for var, val in [
+        ("<xdgData>",   str(h / ".local" / "share")),
+        ("<xdgConfig>", str(h / ".config")),
+        ("<xdgCache>",  str(h / ".cache")),
+        ("<home>",      str(h)),
+    ]:
+        p = p.replace(var, val)
+    if p == "~" or p.startswith("~/"):
+        p = str(h) + p[1:]
+    m = _FOREIGN_HOME_RE.match(p)
+    if m and m.group(0) not in (str(h), str(h.resolve())):
+        p = str(h) + p[m.end():]
     return p
 
 

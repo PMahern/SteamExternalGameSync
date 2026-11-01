@@ -114,7 +114,7 @@ def rclone_ensure_remote_folder() -> bool:
 def rclone_pull_games_json() -> tuple[bool, str]:
     """Pull games.json from remote and merge with local using timestamps (newer wins)."""
     remote_file = f"{RCLONE_REMOTE}/games.json"
-    local_games = load_games()
+    local_games = load_games(include_deleted=True)
     remote_games = _fetch_remote_games()
     if not remote_games:
         # Nothing on server yet -- nothing to pull
@@ -191,7 +191,7 @@ def rclone_push_games_json() -> tuple[bool, str]:
     remote_file   = f"{RCLONE_REMOTE}/games.json"
     remote_games  = _fetch_remote_games()
     if remote_games:
-        merged = merge_games(load_games(), remote_games)
+        merged = merge_games(load_games(include_deleted=True), remote_games)
         save_games(merged)
     try:
         r = _run(

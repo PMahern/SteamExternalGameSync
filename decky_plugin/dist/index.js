@@ -25,6 +25,84 @@ const definePlugin = (fn) => {
     };
 };
 
+// ── Backend callables ─────────────────────────────────────────────────────────
+const getSaveHistory = callable('get_save_history');
+const restoreBackup = callable('restore_backup');
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtSize(n) {
+    if (n < 1024)
+        return `${n} B`;
+    if (n < 1024 * 1024)
+        return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024)
+        return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+function whereLabel(e) {
+    return (e.source === 'cloud' ? 'Cloud' : 'This device') + (e.deleted ? ' (deleted config)' : '');
+}
+const GREY = '#8899a6';
+const RED = '#e74c3c';
+// ── Modal ─────────────────────────────────────────────────────────────────────
+function HistoryModal({ closeModal, gameId, gameName, onRestored, }) {
+    const [phase, setPhase] = SP_REACT.useState({ kind: 'loading' });
+    const load = SP_REACT.useCallback(() => {
+        setPhase({ kind: 'loading' });
+        getSaveHistory(gameId)
+            .then(data => setPhase(data.error ? { kind: 'error', msg: data.error } : { kind: 'list', data }))
+            .catch(() => setPhase({ kind: 'error', msg: 'Request failed' }));
+    }, [gameId]);
+    SP_REACT.useEffect(load, [load]);
+    const restore = SP_REACT.useCallback((entry) => {
+        setPhase({ kind: 'restoring', entry });
+        restoreBackup(gameId, entry.source, entry.name)
+            .then(result => {
+            setPhase({ kind: 'done', result });
+            if (result.ok)
+                onRestored?.();
+        })
+            .catch(() => setPhase({ kind: 'error', msg: 'Restore request failed' }));
+    }, [gameId, onRestored]);
+    // Can't close mid-restore: the backend keeps going and the user would lose the result
+    const close = phase.kind === 'restoring' ? undefined : closeModal;
+    let body;
+    let footer;
+    switch (phase.kind) {
+        case 'loading':
+            body = SP_JSX.jsx("div", { style: { color: GREY }, children: "Loading backups..." });
+            footer = SP_JSX.jsx(DFL.DialogButton, { onClick: closeModal, children: "Close" });
+            break;
+        case 'error':
+            body = SP_JSX.jsx("div", { style: { color: RED }, children: phase.msg });
+            footer = (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.DialogButton, { onClick: load, children: "Retry" }), SP_JSX.jsx(DFL.DialogButton, { onClick: closeModal, children: "Close" })] }));
+            break;
+        case 'list': {
+            const { entries, cloud_ok, keep } = phase.data;
+            body = (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { style: { color: GREY, fontSize: '13px', marginBottom: '8px' }, children: ["Saves are backed up whenever they're about to be replaced. The ", keep, " newest are kept on each side. Restoring puts a backup on this device and the cloud; other devices get it on their next launch."] }), !cloud_ok && (SP_JSX.jsx("div", { style: { color: RED, fontSize: '13px', marginBottom: '8px' }, children: "Couldn't reach cloud storage, so only backups on this device are shown." })), entries.length === 0 && SP_JSX.jsx("div", { style: { color: GREY }, children: "No backups yet." }), SP_JSX.jsx(DFL.Focusable, { style: { display: 'flex', flexDirection: 'column', gap: '4px' }, children: entries.map(e => (SP_JSX.jsxs(DFL.Focusable, { style: {
+                                display: 'flex', alignItems: 'center', gap: '12px',
+                                padding: '6px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: '4px',
+                            }, 'flow-children': 'row', children: [SP_JSX.jsxs("div", { style: { flex: 1, minWidth: 0 }, children: [SP_JSX.jsxs("div", { style: { fontSize: '14px', fontWeight: 500 }, children: [e.when ?? e.name, SP_JSX.jsx("span", { style: { color: GREY, fontWeight: 400, marginLeft: '8px' }, children: whereLabel(e) })] }), SP_JSX.jsxs("div", { style: { fontSize: '12px', color: GREY }, children: [e.files, " file", e.files !== 1 ? 's' : '', " \u00B7 ", fmtSize(e.size), e.newest_file && ` · newest save ${e.newest_file}`] })] }), SP_JSX.jsx(DFL.DialogButton, { style: { width: '90px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, onClick: () => setPhase({ kind: 'confirm', data: phase.data, entry: e }), children: "Restore" })] }, `${e.source}/${e.name}`))) })] }));
+            footer = SP_JSX.jsx(DFL.DialogButton, { onClick: closeModal, children: "Close" });
+            break;
+        }
+        case 'confirm': {
+            const e = phase.entry;
+            body = (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("p", { style: { marginTop: 0 }, children: ["Restore the backup from ", SP_JSX.jsx("b", { children: e.when ?? e.name }), " (", whereLabel(e).toLowerCase(), ",", ' ', e.files, " files, ", fmtSize(e.size), ")?"] }), SP_JSX.jsx("p", { style: { color: GREY, fontSize: '13px' }, children: "This replaces the saves on this device and in the cloud. The restored files get the current time as their timestamp, so every other device treats them as newest and downloads them on its next launch. Your current saves are backed up first, so you can undo this from here." }), SP_JSX.jsx("p", { style: { color: RED, fontSize: '13px' }, children: "Close the game on every device before restoring." })] }));
+            footer = (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.DialogButton, { onClick: () => restore(e), children: "Restore" }), SP_JSX.jsx(DFL.DialogButton, { onClick: () => setPhase({ kind: 'list', data: phase.data }), children: "Back" })] }));
+            break;
+        }
+        case 'restoring':
+            body = SP_JSX.jsxs("div", { style: { color: GREY }, children: ["Restoring backup from ", phase.entry.when ?? phase.entry.name, "..."] });
+            footer = SP_JSX.jsx(DFL.DialogButton, { disabled: true, children: "Restoring..." });
+            break;
+        case 'done':
+            body = (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx("div", { style: { color: phase.result.ok ? '#4caf76' : RED, fontWeight: 600, marginBottom: '8px' }, children: phase.result.ok ? 'Saves restored' : 'Restore failed' }), phase.result.lines.map((l, i) => (SP_JSX.jsxs("div", { style: { fontSize: '13px', color: l.ok ? undefined : RED }, children: [l.ok ? '✓' : '✗', " ", l.msg] }, i)))] }));
+            footer = (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.DialogButton, { onClick: closeModal, children: "Done" }), SP_JSX.jsx(DFL.DialogButton, { onClick: load, children: "Back to history" })] }));
+            break;
+    }
+    return (SP_JSX.jsxs(DFL.ModalRoot, { closeModal: close, children: [SP_JSX.jsxs(DFL.DialogHeader, { children: ["Save History \u2014 ", gameName] }), SP_JSX.jsx(DFL.DialogBody, { children: body }), SP_JSX.jsx(DFL.DialogFooter, { children: SP_JSX.jsx(DFL.Focusable, { style: { display: 'flex', gap: '8px' }, 'flow-children': 'row', children: footer }) })] }));
+}
+
 // Safe wrappers in case dynamic module finders return undefined after a Steam update
 const SafeDialogButton = DFL.DialogButton ??
     (({ disabled, onClick, style, children }) => (SP_JSX.jsx("button", { disabled: disabled, onClick: onClick, style: {
@@ -184,6 +262,9 @@ function SyncPage() {
             setResolvingGames(prev => { const s = new Set(prev); s.delete(game_id); return s; });
         }
     }, [resolvingGames, updateGame]);
+    const handleHistory = SP_REACT.useCallback((g) => {
+        DFL.showModal(SP_JSX.jsx(HistoryModal, { gameId: g.id, gameName: g.name, onRestored: () => updateGame(g.id, { status: 'idle', msg: undefined, syncStatus: 'in_sync' }) }));
+    }, [updateGame]);
     const anySyncing = isSyncingAll || syncingGames.size > 0;
     const conflictCount = gameStates.filter(g => g.status === 'conflict').length;
     return (SP_JSX.jsxs("div", { style: { overflowY: 'auto', height: '100%', padding: '48px 16px 16px' }, children: [SP_JSX.jsx("div", { style: { fontSize: '20px', fontWeight: 700, marginBottom: '12px' }, children: "Manage ExternalGameSync Saves" }), conflictCount > 0 && (SP_JSX.jsxs("div", { style: { color: '#e74c3c', fontSize: '13px', marginBottom: '8px' }, children: [conflictCount, " conflict", conflictCount !== 1 ? 's' : '', " \u2014 choose what to keep below"] })), SP_JSX.jsx(SafeFocusable, { style: { marginBottom: '16px' }, children: SP_JSX.jsx(SafeDialogButton, { disabled: anySyncing || !loaded, onClick: handleSyncAll, style: { width: '100%' }, children: isSyncingAll ? 'Syncing...' : 'Sync All' }) }), SP_JSX.jsxs(SafeFocusable, { style: { display: 'flex', flexDirection: 'column', gap: '4px' }, children: [loaded && gameStates.length === 0 && (SP_JSX.jsx("div", { style: { color: '#8899a6', padding: '8px 0' }, children: "No games assigned to this machine." })), gameStates.map(g => {
@@ -202,7 +283,7 @@ function SyncPage() {
                             }, children: [SP_JSX.jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }, children: [SP_JSX.jsx("span", { style: {
                                                 fontSize: '14px', fontWeight: 500,
                                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                                            }, children: g.name }), statusLabel !== '' && (SP_JSX.jsx("span", { style: { fontSize: '12px', color: statusColor, whiteSpace: 'nowrap', flexShrink: 0 }, children: statusLabel }))] }), SP_JSX.jsxs("div", { style: { display: 'flex', gap: '6px', flexShrink: 0 }, children: [!isConflict && !isSyncingAll && (SP_JSX.jsx(SafeDialogButton, { disabled: isThisSyncing || anySyncing, onClick: () => handleSyncOne(g.id), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: isThisSyncing ? '...' : 'Sync' })), isConflict && (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(SafeDialogButton, { disabled: isResolving, onClick: () => handleResolve(g.id, 'local'), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "Local" }), SP_JSX.jsx(SafeDialogButton, { disabled: isResolving, onClick: () => handleResolve(g.id, 'remote'), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "Cloud" })] }))] })] }, g.id));
+                                            }, children: g.name }), statusLabel !== '' && (SP_JSX.jsx("span", { style: { fontSize: '12px', color: statusColor, whiteSpace: 'nowrap', flexShrink: 0 }, children: statusLabel }))] }), SP_JSX.jsxs("div", { style: { display: 'flex', gap: '6px', flexShrink: 0 }, children: [!isConflict && !isSyncingAll && (SP_JSX.jsx(SafeDialogButton, { disabled: isThisSyncing || anySyncing, onClick: () => handleSyncOne(g.id), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: isThisSyncing ? '...' : 'Sync' })), isConflict && (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(SafeDialogButton, { disabled: isResolving, onClick: () => handleResolve(g.id, 'local'), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "Local" }), SP_JSX.jsx(SafeDialogButton, { disabled: isResolving, onClick: () => handleResolve(g.id, 'remote'), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "Cloud" })] })), SP_JSX.jsx(SafeDialogButton, { disabled: isThisSyncing || isResolving || isSyncingAll, onClick: () => handleHistory(g), style: { width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }, children: "History" })] })] }, g.id));
                     })] })] }));
 }
 

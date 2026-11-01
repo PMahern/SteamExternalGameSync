@@ -38,6 +38,15 @@ def set_local_config(game_id: str, cfg: dict):
     save_local_configs(configs)
 
 
+def remove_local_config(game_id: str) -> bool:
+    """Forget this machine's config for a game. Returns True if one existed."""
+    configs = load_local_configs()
+    if configs.pop(game_id, None) is None:
+        return False
+    save_local_configs(configs)
+    return True
+
+
 def migrate_from_games_json():
     """
     One-time migration from the old format where machine configs lived inside games.json.

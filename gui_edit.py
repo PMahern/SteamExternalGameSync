@@ -93,7 +93,8 @@ def _edit_s2_form(game_cfg: dict):
             save_prefill = game_cfg.get("save_path", "")
     elif platform == "linux_native":
         exe_prefill  = ""
-        save_prefill = (mc.get("save_path", "") if mc else "") or game_cfg.get("save_path", "")
+        save_prefill = ((mc.get("save_path", "") if mc else "")
+                        or ludusavi.expand_linux_home_path(game_cfg.get("save_path", "")))
     elif platform == "windows":
         exe_prefill  = (mc.get("exe_path", "") if mc else "") or game_cfg.get("exe_path", "")
         save_prefill = (mc.get("save_path", "") if mc else "") or game_cfg.get("save_path", "")

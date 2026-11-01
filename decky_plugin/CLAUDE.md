@@ -9,6 +9,8 @@ A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for t
 | `main.py` | Python backend — bridges Decky's RPC to the app's sync/game modules |
 | `src/index.tsx` | Plugin entry point — QAM panel, game page status bar, conflict modal, router patch |
 | `src/SyncModal.tsx` | QAM modal — game list with per-game sync buttons and conflict resolution |
+| `src/SyncPage.tsx` | Manage Saves page (routed) — game list, sync/conflict/history buttons |
+| `src/HistoryModal.tsx` | Save History modal — list a game's backups, confirm + restore one |
 | `src/SyncOverlay.tsx` | (unused/legacy) |
 | `dist/index.js` | Compiled frontend — what Decky actually loads |
 | `build.sh` / `build.bat` | Build scripts that compile TSX and copy output |
@@ -24,6 +26,8 @@ Python class `Plugin` with async methods callable from the frontend via `callabl
 | `sync_game(game_id)` | Pull then push a single game |
 | `sync_all()` | Pull then push all assigned games (emits `sync_progress` events) |
 | `resolve_conflict(game_id, keep)` | Resolve conflict: `keep='local'` or `keep='remote'` |
+| `get_save_history(game_id)` | Backups (cloud + this device) newest first, dates pre-formatted; `{entries, cloud_ok, keep, error}` |
+| `restore_backup(game_id, source, name)` | Restore a backup to this device + cloud via `sync.restore_save_backup`; `{ok, lines:[{msg, ok}]}` |
 
 Backend imports from the installed app (`~/.local/share/externalgamesync/`) at call time via `_ensure_path()` — not at module load — so the plugin tolerates the app not being installed.
 
@@ -37,6 +41,7 @@ Backend imports from the installed app (`~/.local/share/externalgamesync/`) at c
 - Loads game list immediately, then fetches sync statuses in background (two-phase load so the list appears fast)
 - Sync All iterates games sequentially from the frontend (not a single backend call) so per-game status updates live in React state
 - Per-game sync button + conflict resolution (Local / Cloud buttons) inline in each row
+- Per-game History button opens `HistoryModal` (loading → list → confirm → restoring → done); the modal can't be dismissed mid-restore
 - Left border color indicates sync status at a glance
 
 ## Status values (shared between backend and frontend)

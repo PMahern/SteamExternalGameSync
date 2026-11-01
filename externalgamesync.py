@@ -239,6 +239,10 @@ COMMANDS = {
     "sync":               "Manually sync one game or all games",
     "update-shortcuts":   "Regenerate Steam shortcuts + copy wrapper/pre-launcher for all configured games",
     "list":               "List tracked games and status",
+    "unassign":           "Unhook a game from Steam on this machine  <game>",
+    "delete":             "Delete a game config from every machine  <game> [--cloud-data]",
+    "history":            "List save backups for a game  <game>",
+    "restore":            "Restore a save backup everywhere  <game> <#>",
     "log":                "Show recent log  [N lines, default 50]",
     "install-decky":      "Install the Decky Loader plugin to ~/homebrew/plugins/",
     "update":             "Update ExternalGameSync to the latest version from GitHub",
@@ -785,6 +789,105 @@ def cmd_list(args):
     print()
 
 
+def cmd_unassign(args):
+    from remove import unassign_game, orphaned_local_games
+    if not args:
+        print("Usage: externalgamesync unassign <game>")
+        sys.exit(1)
+    ident = args[0].lower()
+    game = find_game(args[0]) or next(
+        (g for g in orphaned_local_games() if g["id"] == args[0] or g["name"].lower() == ident), None)
+    if not game:
+        print(f"Game not found: {args[0]}")
+        sys.exit(1)
+    results = unassign_game(game)
+    for msg, ok in results:
+        print(f"  {'OK' if ok else ' X'}  {msg}")
+    print("\nRestart Steam to apply changes.")
+    sys.exit(0 if all(ok for _, ok in results) else 1)
+
+
+def cmd_delete(args):
+    from remove import delete_game_everywhere
+    names = [a for a in args if not a.startswith("--")]
+    if not names:
+        print("Usage: externalgamesync delete <game> [--cloud-data]")
+        sys.exit(1)
+    game = find_game(names[0])
+    if not game:
+        print(f"Game not found: {names[0]}")
+        sys.exit(1)
+    cloud_data = "--cloud-data" in args
+    try:
+        answer = input(f"Delete '{game['name']}' ({game['id']}) from every machine"
+                       f"{' and move its cloud saves to saves_backup' if cloud_data else ''}? [y/N] ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
+        print("Cancelled.")
+        sys.exit(1)
+    results = delete_game_everywhere(game, remove_cloud_data=cloud_data)
+    for msg, ok in results:
+        print(f"  {'OK' if ok else ' X'}  {msg}")
+    sys.exit(0 if all(ok for _, ok in results) else 1)
+
+
+def cmd_history(args):
+    """List a game's save backups (cloud + this machine), newest first."""
+    from sync import list_save_history
+    if not args:
+        print("Usage: externalgamesync history <game>")
+        sys.exit(1)
+    game = find_game(args[0])
+    if not game:
+        print(f"Game not found: {args[0]}")
+        sys.exit(1)
+    entries, cloud_ok = list_save_history(game["id"])
+    if not cloud_ok:
+        print("Warning: could not reach cloud storage -- showing local backups only.\n")
+    if not entries:
+        print("No backups yet.")
+        return
+    print(f"{'#':>3}  {'Backed up':<17} {'Stored on':<14} {'Files':>5} {'Bytes':>10}  Newest file")
+    for i, e in enumerate(entries, 1):
+        when   = e["when"].strftime("%Y-%m-%d %H:%M") if e["when"] else "?"
+        newest = e["newest_file"].strftime("%Y-%m-%d %H:%M") if e["newest_file"] else "?"
+        where  = ("cloud" if e["source"] == "cloud" else "this machine") + (" (del)" if e["deleted"] else "")
+        print(f"{i:>3}  {when:<17} {where:<14} {e['files']:>5} {e['size']:>10}  {newest}")
+    print(f"\nRestore one with:  externalgamesync restore {game['id']} <#>")
+
+
+def cmd_restore(args):
+    """Restore a backup from `history` onto this machine and the cloud."""
+    from sync import list_save_history, restore_save_backup
+    if len(args) < 2 or not args[1].isdigit():
+        print("Usage: externalgamesync restore <game> <#>   (numbers from 'history')")
+        sys.exit(1)
+    game = find_game(args[0])
+    if not game:
+        print(f"Game not found: {args[0]}")
+        sys.exit(1)
+    entries, _ = list_save_history(game["id"])
+    n = int(args[1])
+    if not 1 <= n <= len(entries):
+        print(f"No backup #{n} -- run 'externalgamesync history {game['id']}'")
+        sys.exit(1)
+    entry = entries[n - 1]
+    when  = entry["when"].strftime("%Y-%m-%d %H:%M") if entry["when"] else entry["name"]
+    try:
+        answer = input(f"Replace '{game['name']}' saves on this machine and the cloud with the "
+                       f"{entry['source']} backup from {when}? Current saves are backed up first. [y/N] ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
+        print("Cancelled.")
+        sys.exit(1)
+    results = restore_save_backup(game["id"], entry, game)
+    for msg, ok in results:
+        print(f"  {'OK' if ok else ' X'}  {msg}")
+    sys.exit(0 if all(ok for _, ok in results) else 1)
+
+
 def cmd_log(args):
     # Write mode: externalgamesync log "some message"  (first arg isn't a number)
     if args and not args[0].isdigit():
@@ -986,6 +1089,10 @@ def main():
         "resync":             cmd_resync,
         "update-shortcuts":   cmd_update_shortcuts,
         "list":               cmd_list,
+        "unassign":           cmd_unassign,
+        "delete":             cmd_delete,
+        "history":            cmd_history,
+        "restore":            cmd_restore,
         "log":           cmd_log,
         "install-decky": cmd_install_decky,
         "update":        cmd_update,

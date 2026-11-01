@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { DialogButton, Focusable } from '@decky/ui';
+import { DialogButton, Focusable, showModal } from '@decky/ui';
 import { callable } from '@decky/api';
+import HistoryModal from './HistoryModal';
 
 // Safe wrappers in case dynamic module finders return undefined after a Steam update
 const SafeDialogButton: React.FC<{ disabled?: boolean; onClick?: () => void; style?: React.CSSProperties; children?: React.ReactNode }> =
@@ -211,6 +212,16 @@ export default function SyncPage() {
     }
   }, [resolvingGames, updateGame]);
 
+  const handleHistory = useCallback((g: GameSyncState) => {
+    showModal(
+      <HistoryModal
+        gameId={g.id}
+        gameName={g.name}
+        onRestored={() => updateGame(g.id, { status: 'idle', msg: undefined, syncStatus: 'in_sync' })}
+      />,
+    );
+  }, [updateGame]);
+
   const anySyncing    = isSyncingAll || syncingGames.size > 0;
   const conflictCount = gameStates.filter(g => g.status === 'conflict').length;
 
@@ -311,6 +322,13 @@ export default function SyncPage() {
                     </SafeDialogButton>
                   </>
                 )}
+                <SafeDialogButton
+                  disabled={isThisSyncing || isResolving || isSyncingAll}
+                  onClick={() => handleHistory(g)}
+                  style={{ width: '70px', minWidth: 'unset', fontSize: '12px', padding: '4px 0' }}
+                >
+                  History
+                </SafeDialogButton>
               </div>
             </div>
           );
