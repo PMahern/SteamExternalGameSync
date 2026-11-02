@@ -267,6 +267,25 @@ else
     echo "    Then re-run:     bash install.sh"
 fi
 
+# ── 8b. Native Linux pre-launcher (dialogs for native Linux games) ────────────
+echo ""
+echo "Checking native pre-launcher..."
+PRELAUNCHER_NATIVE_PREBUILT="$SCRIPT_DIR/pre-launcher/pre-launcher"
+if [[ -f "$PRELAUNCHER_NATIVE_PREBUILT" ]]; then
+    cp "$PRELAUNCHER_NATIVE_PREBUILT" "$APP_DIR/pre-launcher"
+    chmod +x "$APP_DIR/pre-launcher"
+    if "$APP_DIR/pre-launcher" probe >/dev/null 2>&1; then
+        echo "✓ pre-launcher installed from repo"
+    else
+        echo "[warn] pre-launcher installed but can't load on this system:"
+        ldd "$APP_DIR/pre-launcher" 2>/dev/null | grep "not found" | sed 's/^/         /'
+        echo "       Native Linux games will launch without sync dialogs."
+        echo "       Rebuild it here with: bash pre-launcher/build.sh"
+    fi
+else
+    echo "[warn] pre-launcher/pre-launcher not found — native Linux games will launch without sync dialogs"
+fi
+
 # ── 9. Summary ────────────────────────────────────────────────────────────────
 echo ""
 

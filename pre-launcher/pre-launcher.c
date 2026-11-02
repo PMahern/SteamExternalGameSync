@@ -288,9 +288,13 @@ static const char *font_search_paths[] = {
 #else
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Regular.ttf", /* Fedora/Bazzite */
+    "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
     "/usr/share/fonts/opentype/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
     "/usr/share/fonts/gnu-free/FreeSans.ttf",
@@ -304,9 +308,13 @@ static const char *font_search_paths_bold[] = {
 #else
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/opentype/noto/NotoSans-Bold.ttf",
     "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     "/usr/share/fonts/gnu-free/FreeSansBold.ttf",
@@ -323,6 +331,19 @@ static const char *find_font(int bold)
     const char **alt = bold ? font_search_paths : font_search_paths_bold;
     for (int i = 0; alt[i]; i++)
         if (file_exists(alt[i])) return alt[i];
+#ifndef _WIN32
+    /* Last resort: ask fontconfig (font layout varies between distros) */
+    static char fc_path[2][4096];
+    FILE *p = popen(bold ? "fc-match -f '%{file}' 'sans:bold' 2>/dev/null"
+                         : "fc-match -f '%{file}' 'sans' 2>/dev/null", "r");
+    if (p) {
+        char *out = fc_path[bold ? 1 : 0];
+        size_t n = fread(out, 1, sizeof(fc_path[0]) - 1, p);
+        out[n] = 0;
+        pclose(p);
+        if (n && file_exists(out)) return out;
+    }
+#endif
     return NULL;
 }
 
@@ -1331,6 +1352,11 @@ static void sdl_init(void)
     /* On Linux, HIDAPI is needed to see Steam's virtual gamepad in BPM.
      * On Windows/Wine, Steam Input exposes XInput — HIDAPI can conflict. */
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+    /* gamescope maps windows to the running game via X11 _NET_WM_PID; sdl2-compat
+     * (SDL3, e.g. Fedora/Bazzite) may otherwise pick Wayland and the window is
+     * never shown.  A hint, not setenv, so the game doesn't inherit it. */
+    if (getenv("GAMESCOPE_WAYLAND_DISPLAY") && getenv("DISPLAY"))
+        SDL_SetHint(SDL_HINT_VIDEODRIVER, "x11");
 #endif
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
     SDL_GameControllerEventState(SDL_ENABLE);
@@ -1377,6 +1403,11 @@ int main(int argc, char *argv[])
     diag("ipc_dir: %s", g_ipc_dir);
     diag("SDL_GAMECONTROLLERCONFIG env: %s",
          getenv("SDL_GAMECONTROLLERCONFIG") ? "(set)" : "(not set)");
+    {
+        SDL_version v; SDL_GetVersion(&v);
+        const char *vd = SDL_GetCurrentVideoDriver();
+        diag("SDL %d.%d.%d  video driver: %s", v.major, v.minor, v.patch, vd ? vd : "(none)");
+    }
 
     EgsStatus s = {0};
     read_status(&s);

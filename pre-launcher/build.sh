@@ -146,8 +146,17 @@ else
     exit 1
 fi
 
+# Link SDL2_ttf statically when possible: immutable distros (SteamOS, Bazzite)
+# ship SDL2, FreeType and HarfBuzz but usually not SDL2_ttf, so a binary built
+# here would otherwise fail to load there.
+_TTF_A="$(pkg-config --variable=libdir SDL2_ttf 2>/dev/null)/libSDL2_ttf.a"
+if [ -f "$_TTF_A" ]; then
+    TTF_LIBS="-Wl,-Bstatic -lSDL2_ttf -Wl,-Bdynamic -lfreetype -lharfbuzz"
+    echo "Linking SDL2_ttf statically ($_TTF_A)"
+fi
+
 gcc -O2 -Wall -o pre-launcher pre-launcher.c \
-    $SDL2_CFLAGS $TTF_CFLAGS $SDL2_LIBS $TTF_LIBS -lm
+    $SDL2_CFLAGS $TTF_CFLAGS $TTF_LIBS $SDL2_LIBS -lm
 echo "OK pre-launcher ($(du -h pre-launcher | cut -f1))"
 mkdir -p "$DEST"
 cp pre-launcher "$DEST/pre-launcher"
